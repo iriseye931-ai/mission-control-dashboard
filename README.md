@@ -4,6 +4,8 @@ Real-time dashboard for multi-agent AI systems — built for the **Claude Code +
 
 ![Dashboard](https://img.shields.io/badge/React_19-Vite-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-WebSockets-green) ![License](https://img.shields.io/badge/license-MIT-purple)
 
+![Mission Control Dashboard](assets/dashboard-full.png)
+
 ---
 
 ## What it shows
