@@ -1,43 +1,41 @@
-# 🚀 Mission Control Dashboard
+# Agent Mesh Mission Control
 
-A production-grade, real-time web dashboard for monitoring multi-agent AI systems.
+Real-time dashboard for multi-agent AI systems — built for the **Claude Code + Hermes + OpenClaw** stack. One command to run. No cloud. No API keys.
 
-## Features
+![Dashboard](https://img.shields.io/badge/React_19-Vite-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-WebSockets-green) ![License](https://img.shields.io/badge/license-MIT-purple)
 
-- **Real-time Updates**: WebSocket-powered instant updates (no polling)
-- **Mission Control UI**: Futuristic operations center design
-- **Agent Monitoring**: Track multiple agents simultaneously
-- **Live Logs**: Streaming console output from all agents
-- **Progress Tracking**: Visual progress bars and metrics
-- **System Metrics**: Token usage, uptime, events/sec
-- **Responsive Design**: Works on desktop and mobile
+---
 
-## Tech Stack
+## What it shows
 
-**Backend:**
-- FastAPI (async WebSockets)
-- Pydantic (data validation)
-- uvicorn (ASGI server)
+Most local AI setups are invisible — agents running in terminals, logs scattered, no idea what's happening across the mesh. This fixes that.
 
-**Frontend:**
-- React 19 + Vite
-- TypeScript
-- Tailwind CSS
-- Zustand (state management)
+- **Agent status** — live view of every agent (Claude Code / Atlas, Hermes, OpenClaw / iriseye) with current task, state, and uptime
+- **Live log feed** — streaming output from all agents in one place
+- **Memory monitor** — watch OpenViking memory stores and recall activity in real time
+- **Cron progress** — Hermes scheduled tasks with progress bars
+- **System metrics** — token usage, events/sec, active connections
+- **Mesh graph** — visual topology of which agents are connected
+
+---
 
 ## Quick Start
 
-### Option 1: Docker (Recommended)
-
 ```bash
+git clone https://github.com/iriseye931-ai/mission-control-dashboard
+cd mission-control-dashboard
 docker-compose up --build
 ```
 
-- Frontend: http://localhost:3000
+- Dashboard: http://localhost:3000
 - Backend API: http://localhost:8000
-- WebSocket: ws://localhost:8000/ws/{client_id}
+- WebSocket: `ws://localhost:8000/ws/{client_id}`
 
-### Option 2: Manual Setup
+No config required — runs with a built-in demo agent simulator so you can see it working immediately.
+
+---
+
+## Manual Setup
 
 **Backend:**
 ```bash
@@ -53,97 +51,69 @@ npm install
 npm run dev
 ```
 
-## Project Structure
+---
 
-```
-mission-control-dashboard/
-├── backend/
-│   ├── main.py              # FastAPI app + WebSocket handler
-│   ├── models.py            # Pydantic models
-│   ├── websocket_manager.py # WebSocket connection manager
-│   ├── event_bus.py         # In-memory pub/sub
-│   └── agent_simulator.py   # Demo agent generator
-├── frontend/
-│   ├── src/
-│   │   ├── components/
-│   │   │   ├── MissionProgress.tsx
-│   │   │   ├── AgentCard.tsx
-│   │   │   ├── SystemMetrics.tsx
-│   │   │   └── LiveLogFeed.tsx
-│   │   ├── hooks/
-│   │   │   └── useWebSocket.ts
-│   │   ├── store/
-│   │   │   └── agentStore.ts
-│   │   ├── types/
-│   │   │   └── index.ts
-│   │   └── App.tsx
-│   ├── index.html
-│   ├── package.json
-│   ├── vite.config.ts
-│   └── tailwind.config.js
-├── docker-compose.yml
-└── requirements.txt
-```
+## Connecting your agents
 
-## API Endpoints
+The backend exposes a WebSocket event bus. Agents push events and the dashboard renders them live.
 
-- `GET /` - API info
-- `GET /api/health` - Health check
-- `GET /api/metrics` - System metrics
-- `GET /api/logs` - Recent logs
-- `GET /api/agents` - Active agents
-- `GET /api/mission` - Mission progress
-- `WS /ws/{client_id}` - WebSocket for real-time events
-
-## Event Types
-
-Agents emit the following events to the WebSocket:
-
-- `thought` - Agent's internal thought process
-- `tool_call` - Tool invocation
-- `tool_result` - Tool execution result
-- `progress_update` - Task progress (0-100%)
-- `output_chunk` - Generated output
-- `task_assigned` - New task assignment
-- `system_metric` - System-wide metrics
-
-## Agent Integration
-
-To integrate your own agents:
-
-1. Import the event bus: `from backend.event_bus import event_bus`
-2. Create agent events:
+**From Python (Hermes, OpenClaw, any agent):**
 ```python
+from backend.event_bus import event_bus
 from backend.models import AgentEvent, EventType
 
-event = AgentEvent(
+await event_bus.publish(AgentEvent(
     event_type=EventType.PROGRESS_UPDATE,
-    source="my_agent",
-    data={"agent_id": "agent_1", "progress": 50, "task": "working..."}
-)
-await event_bus.publish(event)
+    source="hermes",
+    data={"agent_id": "hermes", "progress": 72, "task": "indexing GraphRAG"}
+))
 ```
 
-## Customization
+**Event types:**
+| Event | Payload | Use for |
+|-------|---------|---------|
+| `thought` | `{agent_id, content}` | Agent reasoning steps |
+| `tool_call` | `{agent_id, tool, args}` | Tool invocations |
+| `tool_result` | `{agent_id, tool, result}` | Tool outputs |
+| `progress_update` | `{agent_id, progress, task}` | Task progress 0–100 |
+| `output_chunk` | `{agent_id, content}` | Streamed output |
+| `task_assigned` | `{agent_id, task}` | New task assignment |
+| `system_metric` | `{metric, value}` | System-wide metrics |
 
-- **Colors**: Modify Tailwind config in `frontend/tailwind.config.js`
-- **Theme**: Edit CSS in `frontend/src/index.css`
-- **Components**: Extend React components in `frontend/src/components/`
-
-## Development
-
-```bash
-# Run backend with auto-reload
-uvicorn backend.main:app --reload
-
-# Run frontend with auto-reload
-cd frontend && npm run dev
+**REST API:**
 ```
-
-## License
-
-MIT License
+GET /api/health    — health check
+GET /api/agents    — active agents + status
+GET /api/metrics   — system metrics
+GET /api/logs      — recent log buffer
+GET /api/mission   — mission progress
+```
 
 ---
 
-Built with ❤️ by Team Hermes
+## Stack
+
+| Layer | Tech |
+|-------|------|
+| Frontend | React 19, Vite, TypeScript, Tailwind CSS, Zustand |
+| Backend | FastAPI, uvicorn, WebSockets, Pydantic |
+| Deploy | Docker Compose (one command) |
+
+---
+
+## Part of the iriseye mesh
+
+This dashboard is built to work with the [iriseye](https://github.com/iriseye931-ai/iriseye) local AI mesh:
+
+- **Atlas** (Claude Code) — lead agent, code + decisions
+- **Hermes** — long-running tasks, cron automation
+- **iriseye** (OpenClaw) — file ops, web research, background tasks
+- **OpenViking** — shared persistent memory store
+
+Set up the full mesh: [iriseye repo](https://github.com/iriseye931-ai/iriseye)
+
+---
+
+## License
+
+MIT
