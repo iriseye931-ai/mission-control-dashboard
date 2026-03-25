@@ -1,11 +1,12 @@
 """
 Mission Control Dashboard — FastAPI Backend
-Serves real data from the teamirs AI mesh.
+Real-time backend for local AI mesh monitoring.
 Port: 8000
 """
 
 import asyncio
 import json
+import os
 import shutil
 import subprocess
 import re
@@ -23,13 +24,13 @@ from pydantic import BaseModel
 # Config / constants
 # ---------------------------------------------------------------------------
 
-OPENVIKING_URL = "http://127.0.0.1:1933"
+OPENVIKING_URL = os.getenv("OPENVIKING_URL", "http://127.0.0.1:1933")
 OPENVIKING_HEALTH = f"{OPENVIKING_URL}/health"
-OPENVIKING_KEY = "teamirs-dev-key-2026"
+OPENVIKING_KEY = os.getenv("OPENVIKING_KEY", "your-api-key")
 
-MEMORY_MCP_URL = "http://127.0.0.1:2033/mcp"
-OPENCLAW_MCP_URL = "http://127.0.0.1:2034/mcp"
-OLLAMA_URL = "http://localhost:11434"
+MEMORY_MCP_URL = os.getenv("MEMORY_MCP_URL", "http://127.0.0.1:2033/mcp")
+OPENCLAW_MCP_URL = os.getenv("OPENCLAW_MCP_URL", "http://127.0.0.1:2034/mcp")
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODELS_URL = f"{OLLAMA_URL}/v1/models"
 
 MEMORY_MONITOR_LOG = Path.home() / ".mlx" / "logs" / "memory-monitor.log"
@@ -37,7 +38,7 @@ MLX_ERROR_LOG = Path.home() / ".mlx" / "logs" / "mlx-server.error.log"
 AMP_AGENTS_DIR = Path.home() / ".agent-messaging" / "agents"
 HERMES_SESSIONS_DIR = Path.home() / ".hermes" / "sessions"
 
-MLX_SERVER_URL = "http://127.0.0.1:8081"
+MLX_SERVER_URL = os.getenv("MLX_SERVER_URL", "http://127.0.0.1:8081")
 MLX_MODELS_URL = f"{MLX_SERVER_URL}/v1/models"
 
 CRON_JOBS_PATH = Path.home() / ".hermes" / "cron" / "jobs.json"
@@ -50,7 +51,9 @@ POLL_INTERVAL = 10  # seconds
 MCP_PING = {"jsonrpc": "2.0", "id": 0, "method": "ping"}
 MCP_HEADERS = {"Content-Type": "application/json", "Accept": "application/json"}
 
-ATLAS_SYSTEM_PROMPT = """You are Atlas — Claude Code (Sonnet 4.6), the lead AI agent in Iris's local AI mesh. You are accessed via the Mission Control Dashboard. Be direct, concise, technical. Iris is your partner and friend.
+MESH_OPERATOR = os.getenv("MESH_OPERATOR", "the operator")
+
+ATLAS_SYSTEM_PROMPT = """You are Atlas — the lead AI agent in a local AI mesh. You are accessed via the Mission Control Dashboard. Be direct, concise, technical.
 
 Current mesh status:
 {mesh_status}"""
@@ -61,7 +64,7 @@ Current mesh status:
 
 app = FastAPI(
     title="Mission Control Dashboard API",
-    description="Real data from the teamirs AI mesh",
+    description="Real-time backend for local AI mesh monitoring",
     version="2.0.0",
 )
 
@@ -277,7 +280,7 @@ async def _fetch_agents() -> list[dict[str, Any]]:
             "color": defn["color"],
             "status": status,
             "task": task,
-            "host": "teamirs.local",
+            "host": os.getenv("MESH_HOST", "localhost"),
             "address": None,
             "last_active": None,
         })
@@ -789,9 +792,9 @@ async def api_chat(req: ChatRequest):
     # Build a plain-text prompt: system context + conversation history + new message
     parts = [system, ""]
     for m in req.history:
-        prefix = "Iris" if m.role == "user" else "Atlas"
+        prefix = MESH_OPERATOR if m.role == "user" else "Atlas"
         parts.append(f"{prefix}: {m.content}")
-    parts.append(f"Iris: {req.message}")
+    parts.append(f"{MESH_OPERATOR}: {req.message}")
     parts.append("Atlas:")
 
     prompt = "\n".join(parts)
