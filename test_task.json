@@ -1,0 +1,10 @@
+{
+  "task_id": "test_validation_001",
+  "task": "Analyze AI agent architecture patterns and create a summary document",
+  "agents": [
+    "Researcher",
+    "Writer",
+    "Critic"
+  ],
+  "deadline": "2026-03-17T21:00:00Z"
+}

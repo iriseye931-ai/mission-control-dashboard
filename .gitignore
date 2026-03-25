@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.env
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+.DS_Store
+
+# Logs
+logs/
+*.log
+
+# Local config
+*.local
