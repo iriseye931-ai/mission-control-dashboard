@@ -26,7 +26,7 @@ from pydantic import BaseModel
 
 OPENVIKING_URL = os.getenv("OPENVIKING_URL", "http://127.0.0.1:1933")
 OPENVIKING_HEALTH = f"{OPENVIKING_URL}/health"
-OPENVIKING_KEY = os.getenv("OPENVIKING_KEY", "your-api-key")
+OPENVIKING_KEY = os.getenv("OPENVIKING_KEY", "")
 
 MEMORY_MCP_URL = os.getenv("MEMORY_MCP_URL", "http://127.0.0.1:2033/mcp")
 OPENCLAW_MCP_URL = os.getenv("OPENCLAW_MCP_URL", "http://127.0.0.1:2034/mcp")
@@ -759,7 +759,7 @@ async def api_status():
 
 
 # ---------------------------------------------------------------------------
-# Chat endpoint — shells out to `claude -p` using Iris's Pro subscription
+# Chat endpoint — shells out to `claude -p` (requires claude CLI in PATH)
 # ---------------------------------------------------------------------------
 
 class ChatMessage(BaseModel):

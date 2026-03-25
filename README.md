@@ -12,7 +12,7 @@ Real-time dashboard for multi-agent AI systems — built for the **Claude Code +
 
 Most local AI setups are invisible — agents running in terminals, logs scattered, no idea what's happening across the mesh. This fixes that.
 
-- **Agent status** — live view of every agent (Claude Code / Atlas, Hermes, OpenClaw / iriseye) with current task, state, and uptime
+- **Agent status** — live view of every agent (Claude Code, Hermes, OpenClaw, or any custom agent) with current task, state, and uptime
 - **Live log feed** — streaming output from all agents in one place
 - **Memory monitor** — watch OpenViking memory stores and recall activity in real time
 - **Cron progress** — Hermes scheduled tasks with progress bars
@@ -31,9 +31,9 @@ docker-compose up --build
 
 - Dashboard: http://localhost:3000
 - Backend API: http://localhost:8000
-- WebSocket: `ws://localhost:8000/ws/{client_id}`
+- WebSocket: `ws://localhost:8000/ws`
 
-No config required — runs with a built-in demo agent simulator so you can see it working immediately.
+No config required — the backend polls your local services and shows live status immediately.
 
 ---
 
@@ -57,18 +57,23 @@ npm run dev
 
 ## Connecting your agents
 
-The backend exposes a WebSocket event bus. Agents push events and the dashboard renders them live.
+The backend polls your local services and broadcasts state over WebSocket. You can also push events directly from any agent via the REST API.
 
-**From Python (Hermes, OpenClaw, any agent):**
+**From Python (any agent):**
 ```python
-from backend.event_bus import event_bus
-from backend.models import AgentEvent, EventType
+import httpx
 
-await event_bus.publish(AgentEvent(
-    event_type=EventType.PROGRESS_UPDATE,
-    source="hermes",
-    data={"agent_id": "hermes", "progress": 72, "task": "indexing GraphRAG"}
-))
+httpx.post("http://localhost:8000/api/event", json={
+    "event_type": "progress_update",
+    "source": "my-agent",
+    "data": {"agent_id": "my-agent", "progress": 72, "task": "processing data"}
+})
+```
+
+**Via WebSocket (browser / any client):**
+```javascript
+const ws = new WebSocket("ws://localhost:8000/ws");
+ws.onmessage = (e) => console.log(JSON.parse(e.data)); // full mesh state on every update
 ```
 
 **Event types:**
@@ -84,11 +89,13 @@ await event_bus.publish(AgentEvent(
 
 **REST API:**
 ```
-GET /api/health    — health check
-GET /api/agents    — active agents + status
-GET /api/metrics   — system metrics
-GET /api/logs      — recent log buffer
-GET /api/mission   — mission progress
+GET  /api/health    — health check
+GET  /api/agents    — active agents + status
+GET  /api/system    — CPU, RAM, LLM memory usage
+GET  /api/logs      — recent log buffer
+GET  /api/cron      — Hermes scheduled jobs
+GET  /api/memories  — recent memory recalls
+GET  /api/amp       — AMP agent messages
 ```
 
 ---
@@ -103,16 +110,20 @@ GET /api/mission   — mission progress
 
 ---
 
-## Part of the iriseye mesh
+## Built for local AI meshes
 
-This dashboard is built to work with the [iriseye](https://github.com/iriseye931-ai/iriseye) local AI mesh:
+This dashboard was built alongside the [iriseye](https://github.com/iriseye931-ai/iriseye) local AI mesh, and works with any similar setup:
 
-- **Atlas** (Claude Code) — lead agent, code + decisions
-- **Hermes** — long-running tasks, cron automation
-- **iriseye** (OpenClaw) — file ops, web research, background tasks
-- **OpenViking** — shared persistent memory store
+| Role | Examples |
+|------|---------|
+| Lead agent | Claude Code (Atlas), any CLI agent |
+| Task runner | Hermes, any cron-capable agent |
+| File/web agent | OpenClaw / iriseye, browser-use |
+| Memory store | OpenViking, mem0 |
 
-Set up the full mesh: [iriseye repo](https://github.com/iriseye931-ai/iriseye)
+The backend auto-detects running processes and polls local service endpoints — no instrumentation required to get a working dashboard.
+
+Want the full mesh setup? → [iriseye repo](https://github.com/iriseye931-ai/iriseye)
 
 ---
 
