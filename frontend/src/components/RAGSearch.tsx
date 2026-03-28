@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, FormEvent } from 'react'
+import { useState, useRef, useEffect, FormEvent, DragEvent } from 'react'
 
 interface SearchResult {
   uri: string
@@ -23,7 +23,11 @@ export default function RAGSearch() {
   const [inboxFiles, setInboxFiles] = useState<string[]>([])
   const [showFiles, setShowFiles] = useState(false)
   const [ingesting, setIngesting] = useState(false)
+  const [dragging, setDragging] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [uploadMsg, setUploadMsg] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const dragCountRef = useRef(0)
 
   useEffect(() => {
     fetchStatus()
@@ -38,6 +42,52 @@ export default function RAGSearch() {
         setInboxFiles(data.inbox_files ?? [])
       }
     } catch { /* ignore */ }
+  }
+
+  async function uploadFiles(files: FileList | File[]) {
+    const arr = Array.from(files)
+    if (arr.length === 0) return
+    setUploading(true)
+    setUploadMsg(null)
+    let ok = 0
+    let fail = 0
+    for (const file of arr) {
+      try {
+        const form = new FormData()
+        form.append('file', file, file.name)
+        const res = await fetch('/api/rag/upload', { method: 'POST', body: form })
+        if (res.ok) ok++
+        else fail++
+      } catch { fail++ }
+    }
+    setUploadMsg(
+      fail === 0
+        ? `Uploaded ${ok} file${ok !== 1 ? 's' : ''} — click reindex to search`
+        : `${ok} uploaded, ${fail} failed`
+    )
+    setUploading(false)
+    await fetchStatus()
+  }
+
+  function onDragEnter(e: DragEvent) {
+    e.preventDefault()
+    dragCountRef.current++
+    setDragging(true)
+  }
+
+  function onDragLeave(e: DragEvent) {
+    e.preventDefault()
+    dragCountRef.current--
+    if (dragCountRef.current === 0) setDragging(false)
+  }
+
+  function onDragOver(e: DragEvent) { e.preventDefault() }
+
+  async function onDrop(e: DragEvent) {
+    e.preventDefault()
+    dragCountRef.current = 0
+    setDragging(false)
+    if (e.dataTransfer.files.length > 0) await uploadFiles(e.dataTransfer.files)
   }
 
   async function handleSearch(e: FormEvent) {
@@ -91,9 +141,24 @@ export default function RAGSearch() {
 
   return (
     <div
-      className="rounded-lg flex flex-col h-full"
-      style={{ background: '#111118', border: '1px solid #1e1e2e' }}
+      className="rounded-lg flex flex-col h-full relative"
+      style={{ background: '#111118', border: `1px solid ${dragging ? '#8b5cf6' : '#1e1e2e'}`, transition: 'border-color 0.15s' }}
+      onDragEnter={onDragEnter}
+      onDragLeave={onDragLeave}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
     >
+      {/* Drag overlay */}
+      {dragging && (
+        <div
+          className="absolute inset-0 rounded-lg flex items-center justify-center z-10 pointer-events-none"
+          style={{ background: '#8b5cf611', border: '2px dashed #8b5cf6' }}
+        >
+          <span className="text-sm font-medium" style={{ color: '#8b5cf6' }}>
+            Drop files to add to inbox
+          </span>
+        </div>
+      )}
       {/* Header */}
       <div
         className="px-4 py-3 flex items-center gap-2"
@@ -132,6 +197,20 @@ export default function RAGSearch() {
         </div>
       </div>
 
+      {/* Upload status */}
+      {(uploading || uploadMsg) && (
+        <div
+          className="px-4 py-2 text-xs"
+          style={{
+            borderBottom: '1px solid #1e1e2e',
+            color: uploading ? '#8b5cf6' : uploadMsg?.includes('failed') ? '#ef4444' : '#22c55e',
+            background: '#0d0d14',
+          }}
+        >
+          {uploading ? 'Uploading…' : uploadMsg}
+        </div>
+      )}
+
       {/* Inbox file list (collapsible) */}
       {showFiles && inboxFiles.length > 0 && (
         <div
@@ -153,7 +232,7 @@ export default function RAGSearch() {
       <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-2" style={{ minHeight: 0 }}>
         {results.length === 0 && !loading && !error && (
           <p className="text-xs text-center my-auto" style={{ color: '#475569' }}>
-            Drop files into ~/Documents/rag/inbox/ then search
+            Drag files here or drop into ~/Documents/rag/inbox/ then search
           </p>
         )}
 

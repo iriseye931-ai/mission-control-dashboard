@@ -1378,6 +1378,46 @@ async def api_rag_status():
     }
 
 
+@app.post("/api/rag/upload")
+async def api_rag_upload(file: UploadFile = File(...)):
+    """Upload a file directly into the RAG inbox."""
+    RAG_INBOX.mkdir(parents=True, exist_ok=True)
+    safe_name = Path(file.filename or "upload").name
+    dest = RAG_INBOX / safe_name
+    content = await file.read()
+    dest.write_bytes(content)
+    return {"filename": safe_name, "size": len(content)}
+
+
+# ---------------------------------------------------------------------------
+# TTS
+# ---------------------------------------------------------------------------
+
+class TTSRequest(BaseModel):
+    text: str
+    voice: str = "en-US-AriaNeural"
+
+
+@app.post("/api/tts")
+async def api_tts(req: TTSRequest):
+    """Convert text to speech using edge-tts and return mp3 audio."""
+    import edge_tts
+
+    text = req.text.strip()
+    if not text:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="text is empty")
+
+    communicate = edge_tts.Communicate(text, req.voice)
+
+    async def audio_stream():
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                yield chunk["data"]
+
+    return StreamingResponse(audio_stream(), media_type="audio/mpeg")
+
+
 # ---------------------------------------------------------------------------
 # WebSocket
 # ---------------------------------------------------------------------------

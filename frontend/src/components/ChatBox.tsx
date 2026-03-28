@@ -77,8 +77,10 @@ export default function ChatBox() {
 
   const [input, setInput] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [ttsEnabled, setTtsEnabled] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
 
   const { recording, transcribing, voiceError, startRecording, stopRecording } =
     useVoiceRecorder((text) => setInput((prev) => (prev ? prev + ' ' + text : text)))
@@ -146,6 +148,34 @@ export default function ChatBox() {
       setChatLoading(false)
       abortRef.current = null
     }
+
+    // TTS: speak the completed assistant response
+    if (ttsEnabled) {
+      const store = useDashboardStore.getState()
+      const msgs = store.chatHistory
+      const lastAssistant = [...msgs].reverse().find((m) => m.role === 'assistant')
+      if (lastAssistant?.content) {
+        speakText(lastAssistant.content)
+      }
+    }
+  }
+
+  async function speakText(text: string) {
+    try {
+      audioRef.current?.pause()
+      const res = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: text.slice(0, 1000) }),
+      })
+      if (!res.ok) return
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const audio = new Audio(url)
+      audioRef.current = audio
+      audio.play()
+      audio.onended = () => URL.revokeObjectURL(url)
+    } catch { /* tts is best-effort */ }
   }
 
   function handleStop() {
@@ -173,15 +203,29 @@ export default function ChatBox() {
         <span className="text-xs" style={{ color: '#475569' }}>
           {isChatLoading ? 'streaming…' : recording ? 'listening…' : transcribing ? 'transcribing…' : 'Lead Agent'}
         </span>
-        {isChatLoading && (
+        <div className="ml-auto flex items-center gap-2">
           <button
-            onClick={handleStop}
-            className="ml-auto text-xs px-2 py-0.5 rounded"
-            style={{ background: '#ef444422', color: '#ef4444', border: '1px solid #ef444433' }}
+            onClick={() => { setTtsEnabled((v) => !v); audioRef.current?.pause() }}
+            title={ttsEnabled ? 'TTS on — click to mute' : 'TTS off — click to enable'}
+            className="px-2 py-0.5 rounded text-xs"
+            style={{
+              background: ttsEnabled ? '#06b6d422' : '#1e293b',
+              color: ttsEnabled ? '#06b6d4' : '#475569',
+              border: `1px solid ${ttsEnabled ? '#06b6d433' : '#334155'}`,
+            }}
           >
-            stop
+            {ttsEnabled ? '🔊' : '🔇'}
           </button>
-        )}
+          {isChatLoading && (
+            <button
+              onClick={handleStop}
+              className="text-xs px-2 py-0.5 rounded"
+              style={{ background: '#ef444422', color: '#ef4444', border: '1px solid #ef444433' }}
+            >
+              stop
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Messages */}
