@@ -139,9 +139,10 @@ async def _fetch_service_health(client: httpx.AsyncClient) -> dict[str, Any]:
 
     # OpenViking
     try:
+        headers = {"Authorization": f"Bearer {OPENVIKING_KEY}"} if OPENVIKING_KEY else {}
         r = await client.get(
             OPENVIKING_HEALTH,
-            headers={"Authorization": f"Bearer {OPENVIKING_KEY}"},
+            headers=headers,
             timeout=HTTP_TIMEOUT,
         )
         body = r.json()
