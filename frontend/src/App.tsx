@@ -59,18 +59,34 @@ function RightPanel() {
         ))}
       </div>
 
-      {/* tab content — fills height, no scroll */}
-      <div className="flex-1 flex flex-col overflow-hidden min-h-0 p-3">
-        {tab === 'system'   && <ComputeGauges />}
-        {tab === 'memory'   && <MemoryMonitorLog />}
+      {/* tab content — bounded, internal scroll only */}
+      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', padding: 10 }}>
+        {tab === 'system' && (
+          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+            <ComputeGauges />
+          </div>
+        )}
+        {tab === 'memory' && (
+          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+            <MemoryMonitorLog />
+          </div>
+        )}
         {tab === 'schedule' && (
-          <div className="flex flex-col gap-2 overflow-hidden">
+          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
             <p style={{ fontSize: 9, color: '#475569', fontFamily: 'monospace', letterSpacing: '0.12em', textTransform: 'uppercase', flexShrink: 0 }}>Scheduled</p>
             <CronProgress />
           </div>
         )}
-        {tab === 'insights' && <MeshInsights />}
-        {tab === 'activity' && <div className="flex flex-col flex-1 overflow-hidden min-h-0"><ActivityFeed /></div>}
+        {tab === 'insights' && (
+          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+            <MeshInsights />
+          </div>
+        )}
+        {tab === 'activity' && (
+          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+            <ActivityFeed />
+          </div>
+        )}
       </div>
     </aside>
   )
