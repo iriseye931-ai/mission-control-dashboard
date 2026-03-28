@@ -45,10 +45,10 @@ export default function AgentCard({ agent }: Props) {
         </span>
         <span className="flex items-center gap-1.5">
           <span
-            className="w-2 h-2 rounded-full"
+            className={isOnline ? 'w-2 h-2 rounded-full animate-pulse' : 'w-2 h-2 rounded-full'}
             style={{
               background: dotColor,
-              boxShadow: isOnline ? `0 0 5px ${dotColor}` : 'none',
+              boxShadow: isOnline ? `0 0 6px ${dotColor}` : 'none',
             }}
           />
           <span className="text-xs" style={{ color: dotColor }}>

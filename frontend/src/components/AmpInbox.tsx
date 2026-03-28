@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, FormEvent } from 'react'
+import { useState, useEffect, useCallback, useRef, FormEvent } from 'react'
 
 interface AmpMessage {
   id: string
@@ -238,7 +238,73 @@ function ComposeModal({
   )
 }
 
+interface AmpEvent {
+  agent: string
+  ts: string
+  id: string
+  msg: string
+}
+
+type AmpView = 'messages' | 'events'
+
+function routeColor(msg: string): string {
+  if (msg.includes('route=hermes') || msg.includes('route=iriseye')) return '#a855f7'
+  if (msg.includes('route=mlx')) return '#10b981'
+  if (msg.includes('reply sent')) return '#06b6d4'
+  return '#475569'
+}
+
+function EventsFeed() {
+  const [events, setEvents] = useState<AmpEvent[]>([])
+  const [loading, setLoading] = useState(true)
+  const bottomRef = useRef<HTMLDivElement>(null)
+
+  const fetchEvents = useCallback(async () => {
+    try {
+      const res = await fetch('/api/amp/events')
+      if (!res.ok) return
+      const data = await res.json()
+      setEvents(data.events ?? [])
+    } catch { /* silent */ } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchEvents()
+    const id = setInterval(fetchEvents, 10_000)
+    return () => clearInterval(id)
+  }, [fetchEvents])
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [events.length])
+
+  if (loading) return <p style={{ fontSize: 10, color: '#334155', padding: 10 }}>Loading…</p>
+  if (events.length === 0) return <p style={{ fontSize: 10, color: '#334155', padding: 10 }}>No routing events yet — send an AMP message to see activity.</p>
+
+  return (
+    <div style={{ flex: 1, overflowY: 'auto', padding: '6px 10px', display: 'flex', flexDirection: 'column', gap: 3 }}>
+      {[...events].reverse().map((ev, i) => (
+        <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'flex-start', padding: '4px 0', borderBottom: '1px solid #0f172a' }}>
+          <span style={{ fontSize: 8, color: '#334155', fontFamily: 'monospace', whiteSpace: 'nowrap', flexShrink: 0, paddingTop: 1 }}>
+            {ev.ts.split(' ')[1] ?? ev.ts}
+          </span>
+          <span style={{ fontSize: 8, padding: '1px 4px', borderRadius: 2, background: '#1e293b', color: '#475569', flexShrink: 0, fontFamily: 'monospace' }}>
+            {ev.agent}
+          </span>
+          <span style={{ fontSize: 9, color: routeColor(ev.msg), fontFamily: 'monospace', lineHeight: 1.4, wordBreak: 'break-all' }}>
+            {ev.msg}
+          </span>
+        </div>
+      ))}
+      <div ref={bottomRef} />
+    </div>
+  )
+}
+
 export default function AmpInbox() {
+  const [view, setView] = useState<AmpView>('events')
   const [messages, setMessages] = useState<AmpMessage[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -267,84 +333,55 @@ export default function AmpInbox() {
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       {/* toolbar */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '6px 10px',
-          borderBottom: '1px solid #1e1e2e',
-          flexShrink: 0,
-        }}
-      >
-        <span style={{ fontSize: 9, color: '#475569', fontFamily: 'monospace' }}>
-          {loading ? 'loading…' : error ? 'error' : `${messages.length} message${messages.length !== 1 ? 's' : ''}`}
-        </span>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '5px 10px', borderBottom: '1px solid #1e1e2e', flexShrink: 0 }}>
+        <div style={{ display: 'flex', gap: 0 }}>
+          {(['events', 'messages'] as AmpView[]).map((v) => (
+            <button key={v} onClick={() => setView(v)} style={{
+              fontSize: 9, padding: '2px 10px', background: 'none',
+              border: 'none', borderBottom: view === v ? '1px solid #06b6d4' : '1px solid transparent',
+              color: view === v ? '#06b6d4' : '#334155', cursor: 'pointer',
+              fontFamily: 'monospace', letterSpacing: '0.08em', textTransform: 'uppercase',
+            }}>
+              {v}
+            </button>
+          ))}
+        </div>
         <button
           onClick={() => setComposing(true)}
-          style={{
-            fontSize: 9, padding: '3px 10px', borderRadius: 3,
-            background: '#06b6d422', color: '#06b6d4',
-            border: '1px solid #06b6d444', cursor: 'pointer',
-            fontFamily: 'monospace', letterSpacing: '0.05em',
-          }}
+          style={{ fontSize: 9, padding: '2px 8px', borderRadius: 3, background: '#06b6d411', color: '#06b6d4', border: '1px solid #06b6d433', cursor: 'pointer', fontFamily: 'monospace' }}
         >
-          Compose
+          + Compose
         </button>
       </div>
 
-      {/* message list */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {loading && (
-          <p style={{ fontSize: 10, color: '#334155', padding: 4 }}>Loading…</p>
-        )}
-        {!loading && error && (
-          <p style={{ fontSize: 10, color: '#ef4444', fontFamily: 'monospace', padding: 4 }}>{error}</p>
-        )}
-        {!loading && !error && messages.length === 0 && (
-          <p style={{ fontSize: 10, color: '#334155', padding: 4 }}>No messages from AI Maestro.</p>
-        )}
-        {messages.map((msg) => (
-          <div
-            key={msg.id || msg.timestamp}
-            style={{
-              background: '#0f172a',
-              border: '1px solid #1e293b',
-              borderRadius: 4,
-              padding: '6px 8px',
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 }}>
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center', minWidth: 0 }}>
-                <StatusBadge status={msg.status} />
-                <span style={{ fontSize: 9, color: '#94a3b8', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {msg.from || '?'}
+      {view === 'events' && <EventsFeed />}
+
+      {view === 'messages' && (
+        <div style={{ flex: 1, overflowY: 'auto', padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {loading && <p style={{ fontSize: 10, color: '#334155', padding: 4 }}>Loading…</p>}
+          {!loading && error && <p style={{ fontSize: 10, color: '#ef4444', fontFamily: 'monospace', padding: 4 }}>{error}</p>}
+          {!loading && !error && messages.length === 0 && <p style={{ fontSize: 10, color: '#334155', padding: 4 }}>No messages from AI Maestro.</p>}
+          {messages.map((msg) => (
+            <div key={msg.id || msg.timestamp} style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 4, padding: '6px 8px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 }}>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center', minWidth: 0 }}>
+                  <StatusBadge status={msg.status} />
+                  <span style={{ fontSize: 9, color: '#94a3b8', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {msg.from || '?'}
+                  </span>
+                </div>
+                <span style={{ fontSize: 8, color: '#334155', fontFamily: 'monospace', flexShrink: 0, marginLeft: 8 }}>
+                  {formatTs(msg.timestamp)}
                 </span>
               </div>
-              <span style={{ fontSize: 8, color: '#334155', fontFamily: 'monospace', flexShrink: 0, marginLeft: 8 }}>
-                {formatTs(msg.timestamp)}
-              </span>
+              {msg.subject && <p style={{ fontSize: 9, color: '#64748b', fontFamily: 'monospace', marginBottom: 2 }}>{msg.subject}</p>}
+              {msg.preview && <p style={{ fontSize: 9, color: '#475569', fontFamily: 'monospace', lineHeight: 1.5, wordBreak: 'break-word' }}>{msg.preview}</p>}
             </div>
-            {msg.subject && (
-              <p style={{ fontSize: 9, color: '#64748b', fontFamily: 'monospace', marginBottom: 2 }}>
-                {msg.subject}
-              </p>
-            )}
-            {msg.preview && (
-              <p style={{ fontSize: 9, color: '#475569', fontFamily: 'monospace', lineHeight: 1.5, wordBreak: 'break-word' }}>
-                {msg.preview}
-              </p>
-            )}
-          </div>
-        ))}
-      </div>
-
-      {composing && (
-        <ComposeModal
-          onClose={() => setComposing(false)}
-          onSent={fetchMessages}
-        />
+          ))}
+        </div>
       )}
+
+      {composing && <ComposeModal onClose={() => setComposing(false)} onSent={fetchMessages} />}
     </div>
   )
 }

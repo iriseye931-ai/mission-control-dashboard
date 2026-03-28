@@ -1,16 +1,14 @@
 import { useState, useRef, useEffect } from 'react'
 import { useDashboardStore } from '../store/dashboardStore'
-import ChatBox from './ChatBox'
 import RAGSearch from './RAGSearch'
 import AmpInbox from './AmpInbox'
 
-type Tab = 'logs' | 'amp' | 'hermes' | 'atlas' | 'rag'
+type Tab = 'logs' | 'amp' | 'hermes' | 'rag'
 
 const TAB_LABELS: { id: Tab; label: string }[] = [
   { id: 'logs', label: 'Logs' },
   { id: 'amp', label: 'AMP' },
   { id: 'hermes', label: 'Hermes' },
-  { id: 'atlas', label: 'Atlas' },
   { id: 'rag', label: 'RAG' },
 ]
 
@@ -131,11 +129,6 @@ export default function MeshPanel() {
       {activeTab === 'logs' && <LogsTab />}
       {activeTab === 'amp' && <AmpInbox />}
       {activeTab === 'hermes' && <HermesTab />}
-      {activeTab === 'atlas' && (
-        <div style={{ flex: 1, padding: '8px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-          <ChatBox />
-        </div>
-      )}
       {activeTab === 'rag' && (
         <div style={{ flex: 1, padding: '8px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           <RAGSearch />

@@ -1119,6 +1119,45 @@ async def api_amp_send(req: AmpSendRequest):
         return {"ok": False, "error": str(exc)}
 
 
+_BRIDGE_LOGS = [
+    Path.home() / ".agent-messaging/agents/hermes/bridge.log",
+    Path.home() / ".agent-messaging/agents/iriseye/bridge.log",
+]
+_BRIDGE_EVENT_RE = re.compile(
+    r'\[(?P<ts>[^\]]+)\] \[(?P<id>[^\]]+)\] (?P<msg>.+)'
+)
+
+
+def _fetch_amp_events() -> list[dict]:
+    events: list[dict] = []
+    for log_path in _BRIDGE_LOGS:
+        agent = log_path.parts[-3]
+        try:
+            lines = log_path.read_text().splitlines()[-60:]
+        except Exception:
+            continue
+        for line in lines:
+            m = _BRIDGE_EVENT_RE.match(line)
+            if not m:
+                continue
+            msg = m.group("msg")
+            if "responded via" in msg or "reply sent" in msg or "route=" in msg:
+                events.append({
+                    "agent": agent,
+                    "ts": m.group("ts"),
+                    "id": m.group("id"),
+                    "msg": msg,
+                })
+    events.sort(key=lambda e: e["ts"], reverse=True)
+    return events[:30]
+
+
+@app.get("/api/amp/events")
+async def api_amp_events():
+    events = await asyncio.get_event_loop().run_in_executor(None, _fetch_amp_events)
+    return {"events": events}
+
+
 @app.get("/api/hermes")
 async def api_hermes():
     status = await asyncio.get_event_loop().run_in_executor(None, _fetch_hermes_status)
