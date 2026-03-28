@@ -2,7 +2,7 @@
 
 Real-time dashboard for multi-agent AI systems — built for the **Claude Code + Hermes + OpenClaw** stack. One command to run. No cloud. No API keys.
 
-![Dashboard](https://img.shields.io/badge/React_19-Vite-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-WebSockets-green) ![License](https://img.shields.io/badge/license-MIT-purple)
+![Dashboard](https://img.shields.io/badge/React_19-Vite-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-WebSockets-green) ![MLX](https://img.shields.io/badge/MLX-Qwen3.5_35B-green) ![License](https://img.shields.io/badge/license-MIT-purple)
 
 ![Mission Control Dashboard](assets/dashboard-full.png)
 
@@ -12,12 +12,29 @@ Real-time dashboard for multi-agent AI systems — built for the **Claude Code +
 
 Most local AI setups are invisible — agents running in terminals, logs scattered, no idea what's happening across the mesh. This fixes that.
 
-- **Agent status** — live view of every agent (Claude Code, Hermes, OpenClaw, or any custom agent) with current task, state, and uptime
-- **Live log feed** — streaming output from all agents in one place
-- **Memory monitor** — watch OpenViking memory stores and recall activity in real time
-- **Cron progress** — Hermes scheduled tasks with progress bars
-- **System metrics** — token usage, events/sec, active connections
-- **Mesh graph** — visual topology of which agents are connected
+- **KPI strip** — live Agents Online, MLX server status, system RAM, AMP queue depth, CPU — always visible at the top
+- **Agent status** — every agent (Atlas, Hermes, iriseye) with current state, pulsing dot, color-coded
+- **Service pills** — OpenViking, MLX, MemMCP, OpenClaw, Ollama — up/down at a glance
+- **Mesh graph** — animated canvas topology: hexagonal agent nodes, radial service nodes, animated pulse dots on active edges
+- **AMP events feed** — live routing log from Hermes + iriseye bridges (route=mlx, route=hermes, reply sent)
+- **AMP inbox** — messages in/out of AI Maestro
+- **MLX tab** — arc gauge showing MLX RAM pressure, model stats, PID, inference engine
+- **Memory monitor** — OpenViking recall activity
+- **Cron/schedule** — Hermes scheduled tasks with progress bars
+- **Mesh insights** — cross-agent pattern analysis
+- **Activity feed** — unified event stream
+
+---
+
+## Design
+
+Premium dark-mode terminal aesthetic. No scroll, no hidden panels.
+
+- **Full-bleed layout** — header → KPI strip → body, zero overflow
+- **Vertical tab rail** — right sidebar with single-click tabs: MLX / Memory / Schedule / Insights / Activity
+- **Square mesh graph viewport** — `Math.min(W, H) × 0.92` ensures the graph never stretches regardless of window shape
+- **Unified color palette** — `#08080f` background, cyan/purple/green/yellow/red accent system consistent across every component
+- **No duplicates** — CPU and RAM in KPI strip only; MLX tab focuses on inference-specific metrics
 
 ---
 
@@ -57,7 +74,7 @@ npm run dev
 
 ## Connecting your agents
 
-The backend polls your local services and broadcasts state over WebSocket. You can also push events directly from any agent via the REST API.
+The backend polls your local services and broadcasts state over WebSocket. Push events directly from any agent via the REST API.
 
 **From Python (any agent):**
 ```python
@@ -89,13 +106,15 @@ ws.onmessage = (e) => console.log(JSON.parse(e.data)); // full mesh state on eve
 
 **REST API:**
 ```
-GET  /api/health    — health check
-GET  /api/agents    — active agents + status
-GET  /api/system    — CPU, RAM, LLM memory usage
-GET  /api/logs      — recent log buffer
-GET  /api/cron      — Hermes scheduled jobs
-GET  /api/memories  — recent memory recalls
-GET  /api/amp       — AMP agent messages
+GET  /api/health        — health check
+GET  /api/agents        — active agents + status
+GET  /api/system        — CPU, RAM, MLX RAM, PID
+GET  /api/logs          — recent log buffer
+GET  /api/cron          — Hermes scheduled jobs
+GET  /api/memories      — recent memory recalls
+GET  /api/amp/messages  — AMP messages from AI Maestro
+GET  /api/amp/events    — live routing events from bridge logs
+POST /api/amp/send      — send AMP message to any agent
 ```
 
 ---
@@ -106,6 +125,7 @@ GET  /api/amp       — AMP agent messages
 |-------|------|
 | Frontend | React 19, Vite, TypeScript, Tailwind CSS, Zustand |
 | Backend | FastAPI, uvicorn, WebSockets, Pydantic |
+| Inference | MLX (Qwen3.5 35B-A3B 4-bit, Apple Silicon) |
 | Deploy | Docker Compose (one command) |
 
 ---
@@ -120,6 +140,7 @@ This dashboard was built alongside the [iriseye](https://github.com/iriseye931-a
 | Task runner | Hermes, any cron-capable agent |
 | File/web agent | OpenClaw / iriseye, browser-use |
 | Memory store | OpenViking, mem0 |
+| Local LLM | MLX (Apple Silicon), Ollama, llama.cpp |
 
 The backend auto-detects running processes and polls local service endpoints — no instrumentation required to get a working dashboard.
 
