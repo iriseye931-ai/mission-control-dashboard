@@ -1,0 +1,350 @@
+import { useState, useEffect, useCallback, FormEvent } from 'react'
+
+interface AmpMessage {
+  id: string
+  from: string
+  subject: string
+  timestamp: string
+  status: string
+  preview: string
+  error?: string
+}
+
+interface ComposeState {
+  recipient: string
+  subject: string
+  message: string
+  type: string
+}
+
+const COMPOSE_DEFAULTS: ComposeState = {
+  recipient: '',
+  subject: '',
+  message: '',
+  type: 'notification',
+}
+
+const MSG_TYPES = ['notification', 'request', 'task']
+
+function formatTs(ts: string): string {
+  if (!ts) return ''
+  try {
+    const d = new Date(ts)
+    if (isNaN(d.getTime())) return ts
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  } catch {
+    return ts
+  }
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const isUnread = status === 'unread'
+  return (
+    <span
+      style={{
+        fontSize: 8,
+        padding: '1px 5px',
+        borderRadius: 3,
+        background: isUnread ? '#06b6d422' : '#1e293b',
+        color: isUnread ? '#06b6d4' : '#475569',
+        border: `1px solid ${isUnread ? '#06b6d444' : '#334155'}`,
+        flexShrink: 0,
+      }}
+    >
+      {isUnread ? 'unread' : 'read'}
+    </span>
+  )
+}
+
+function ComposeModal({
+  onClose,
+  onSent,
+}: {
+  onClose: () => void
+  onSent: () => void
+}) {
+  const [form, setForm] = useState<ComposeState>(COMPOSE_DEFAULTS)
+  const [sending, setSending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  function update(field: keyof ComposeState) {
+    return (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
+      setForm((prev) => ({ ...prev, [field]: e.target.value }))
+  }
+
+  async function handleSend(e: FormEvent) {
+    e.preventDefault()
+    if (!form.recipient.trim() || !form.message.trim()) return
+    setSending(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/amp/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      })
+      const data = await res.json()
+      if (!data.ok) {
+        setError(data.error || 'Send failed')
+      } else {
+        onSent()
+        onClose()
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Send failed')
+    } finally {
+      setSending(false)
+    }
+  }
+
+  const inputStyle: React.CSSProperties = {
+    background: '#0a0a0f',
+    border: '1px solid #1e293b',
+    color: '#e2e8f0',
+    borderRadius: 4,
+    padding: '5px 8px',
+    fontSize: 11,
+    fontFamily: 'monospace',
+    width: '100%',
+    outline: 'none',
+    boxSizing: 'border-box',
+  }
+
+  const labelStyle: React.CSSProperties = {
+    fontSize: 9,
+    color: '#475569',
+    fontFamily: 'monospace',
+    letterSpacing: '0.08em',
+    textTransform: 'uppercase',
+    marginBottom: 3,
+    display: 'block',
+  }
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.7)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 100,
+      }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
+    >
+      <div
+        style={{
+          background: '#0d0d1a',
+          border: '1px solid #1e293b',
+          borderRadius: 6,
+          padding: '16px',
+          width: 380,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 12,
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontSize: 11, color: '#94a3b8', fontFamily: 'monospace', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+            Compose AMP
+          </span>
+          <button
+            onClick={onClose}
+            style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', fontSize: 14, lineHeight: 1 }}
+          >
+            ×
+          </button>
+        </div>
+
+        <form onSubmit={handleSend} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div>
+            <label style={labelStyle}>To</label>
+            <input
+              type="text"
+              value={form.recipient}
+              onChange={update('recipient')}
+              placeholder="hermes, iriseye, agent-a…"
+              required
+              style={inputStyle}
+            />
+          </div>
+
+          <div>
+            <label style={labelStyle}>Subject</label>
+            <input
+              type="text"
+              value={form.subject}
+              onChange={update('subject')}
+              placeholder="Subject"
+              style={inputStyle}
+            />
+          </div>
+
+          <div>
+            <label style={labelStyle}>Type</label>
+            <select value={form.type} onChange={update('type')} style={{ ...inputStyle, cursor: 'pointer' }}>
+              {MSG_TYPES.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label style={labelStyle}>Message</label>
+            <textarea
+              value={form.message}
+              onChange={update('message')}
+              placeholder="Message body…"
+              required
+              rows={5}
+              style={{ ...inputStyle, resize: 'vertical', lineHeight: 1.5 }}
+            />
+          </div>
+
+          {error && (
+            <div style={{ fontSize: 10, color: '#ef4444', fontFamily: 'monospace', background: '#ef444411', border: '1px solid #ef444433', borderRadius: 3, padding: '4px 8px' }}>
+              {error}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button
+              type="button"
+              onClick={onClose}
+              style={{
+                fontSize: 10, padding: '5px 12px', borderRadius: 4, border: '1px solid #334155',
+                background: 'transparent', color: '#64748b', cursor: 'pointer', fontFamily: 'monospace',
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={sending || !form.recipient.trim() || !form.message.trim()}
+              style={{
+                fontSize: 10, padding: '5px 12px', borderRadius: 4, border: 'none',
+                background: sending ? '#06b6d466' : '#06b6d4', color: '#0a0a0f',
+                cursor: sending ? 'not-allowed' : 'pointer', fontFamily: 'monospace',
+                opacity: (!form.recipient.trim() || !form.message.trim()) ? 0.4 : 1,
+              }}
+            >
+              {sending ? 'Sending…' : 'Send'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+export default function AmpInbox() {
+  const [messages, setMessages] = useState<AmpMessage[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [composing, setComposing] = useState(false)
+
+  const fetchMessages = useCallback(async () => {
+    try {
+      const res = await fetch('/api/amp/messages')
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
+      setMessages(data.messages ?? [])
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load messages')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchMessages()
+    const interval = setInterval(fetchMessages, 30_000)
+    return () => clearInterval(interval)
+  }, [fetchMessages])
+
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      {/* toolbar */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '6px 10px',
+          borderBottom: '1px solid #1e1e2e',
+          flexShrink: 0,
+        }}
+      >
+        <span style={{ fontSize: 9, color: '#475569', fontFamily: 'monospace' }}>
+          {loading ? 'loading…' : error ? 'error' : `${messages.length} message${messages.length !== 1 ? 's' : ''}`}
+        </span>
+        <button
+          onClick={() => setComposing(true)}
+          style={{
+            fontSize: 9, padding: '3px 10px', borderRadius: 3,
+            background: '#06b6d422', color: '#06b6d4',
+            border: '1px solid #06b6d444', cursor: 'pointer',
+            fontFamily: 'monospace', letterSpacing: '0.05em',
+          }}
+        >
+          Compose
+        </button>
+      </div>
+
+      {/* message list */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {loading && (
+          <p style={{ fontSize: 10, color: '#334155', padding: 4 }}>Loading…</p>
+        )}
+        {!loading && error && (
+          <p style={{ fontSize: 10, color: '#ef4444', fontFamily: 'monospace', padding: 4 }}>{error}</p>
+        )}
+        {!loading && !error && messages.length === 0 && (
+          <p style={{ fontSize: 10, color: '#334155', padding: 4 }}>No messages from AI Maestro.</p>
+        )}
+        {messages.map((msg) => (
+          <div
+            key={msg.id || msg.timestamp}
+            style={{
+              background: '#0f172a',
+              border: '1px solid #1e293b',
+              borderRadius: 4,
+              padding: '6px 8px',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 }}>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', minWidth: 0 }}>
+                <StatusBadge status={msg.status} />
+                <span style={{ fontSize: 9, color: '#94a3b8', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {msg.from || '?'}
+                </span>
+              </div>
+              <span style={{ fontSize: 8, color: '#334155', fontFamily: 'monospace', flexShrink: 0, marginLeft: 8 }}>
+                {formatTs(msg.timestamp)}
+              </span>
+            </div>
+            {msg.subject && (
+              <p style={{ fontSize: 9, color: '#64748b', fontFamily: 'monospace', marginBottom: 2 }}>
+                {msg.subject}
+              </p>
+            )}
+            {msg.preview && (
+              <p style={{ fontSize: 9, color: '#475569', fontFamily: 'monospace', lineHeight: 1.5, wordBreak: 'break-word' }}>
+                {msg.preview}
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {composing && (
+        <ComposeModal
+          onClose={() => setComposing(false)}
+          onSent={fetchMessages}
+        />
+      )}
+    </div>
+  )
+}

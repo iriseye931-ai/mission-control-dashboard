@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { useDashboardStore } from '../store/dashboardStore'
 import ChatBox from './ChatBox'
 import RAGSearch from './RAGSearch'
+import AmpInbox from './AmpInbox'
 
 type Tab = 'logs' | 'amp' | 'hermes' | 'atlas' | 'rag'
 
@@ -86,59 +87,6 @@ function LogsTab() {
   )
 }
 
-function AmpTab() {
-  const messages = useDashboardStore((s) => s.ampMessages)
-
-  if (messages.length === 0) {
-    return <p style={{ fontSize: 10, color: '#334155', padding: 12 }}>No AMP messages found in ~/.agent-messaging/agents/atlas/</p>
-  }
-
-  return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {messages.map((msg) => {
-        const isInbox = msg.direction === 'inbox'
-        return (
-          <div
-            key={msg.id}
-            style={{
-              background: isInbox ? '#0f172a' : '#0a0a14',
-              border: `1px solid ${isInbox ? '#1e293b' : '#1a1a2e'}`,
-              borderRadius: 4,
-              padding: '6px 8px',
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 }}>
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                <span style={{
-                  fontSize: 8, padding: '1px 5px', borderRadius: 3,
-                  background: isInbox ? '#06b6d422' : '#a855f722',
-                  color: isInbox ? '#06b6d4' : '#a855f7',
-                  border: `1px solid ${isInbox ? '#06b6d444' : '#a855f744'}`,
-                }}>
-                  {isInbox ? 'IN' : 'OUT'}
-                </span>
-                <span style={{ fontSize: 9, color: '#94a3b8', fontFamily: 'monospace' }}>
-                  {isInbox ? msg.from : msg.to}
-                </span>
-              </div>
-              <span style={{ fontSize: 8, color: '#334155', fontFamily: 'monospace' }}>
-                {msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString() : ''}
-              </span>
-            </div>
-            {msg.subject && (
-              <p style={{ fontSize: 9, color: '#64748b', marginBottom: 3, fontFamily: 'monospace' }}>
-                {msg.subject}
-              </p>
-            )}
-            <p style={{ fontSize: 9, color: '#94a3b8', fontFamily: 'monospace', lineHeight: 1.5, wordBreak: 'break-word' }}>
-              {msg.body}
-            </p>
-          </div>
-        )
-      })}
-    </div>
-  )
-}
 
 function HermesTab() {
   const status = useDashboardStore((s) => s.hermesStatus)
@@ -181,7 +129,7 @@ export default function MeshPanel() {
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: '#0a0a0f' }}>
       <TabBar active={activeTab} onChange={setActiveTab} />
       {activeTab === 'logs' && <LogsTab />}
-      {activeTab === 'amp' && <AmpTab />}
+      {activeTab === 'amp' && <AmpInbox />}
       {activeTab === 'hermes' && <HermesTab />}
       {activeTab === 'atlas' && (
         <div style={{ flex: 1, padding: '8px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>

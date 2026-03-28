@@ -1047,6 +1047,78 @@ async def api_amp():
     return {"messages": messages}
 
 
+AI_MAESTRO_URL = os.getenv("AI_MAESTRO_URL", "http://localhost:23000")
+_ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
+
+
+async def _fetch_maestro_messages() -> list[dict[str, Any]]:
+    """Fetch latest 20 messages for claude/atlas from AI Maestro API."""
+    url = f"{AI_MAESTRO_URL}/api/agents/claude/messages"
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+            r = await client.get(url)
+            r.raise_for_status()
+            data = r.json()
+    except Exception as exc:
+        return [{"error": str(exc)}]
+
+    raw = data if isinstance(data, list) else data.get("messages", data.get("data", []))
+    messages = []
+    for item in raw[:20]:
+        if not isinstance(item, dict):
+            continue
+        body = item.get("body", item.get("message", item.get("content", ""))) or ""
+        body = _ANSI_RE.sub("", str(body))
+        preview = body[:120]
+        messages.append({
+            "id": item.get("id", item.get("message_id", "")),
+            "from": item.get("from", item.get("sender", item.get("from_agent", "?"))),
+            "subject": item.get("subject", item.get("type", "")),
+            "timestamp": item.get("timestamp", item.get("sent_at", item.get("created_at", ""))),
+            "status": item.get("status", item.get("read", "unread") if isinstance(item.get("read"), str) else ("read" if item.get("read") else "unread")),
+            "preview": preview,
+        })
+    return messages
+
+
+@app.get("/api/amp/messages")
+async def api_amp_messages():
+    """Fetch latest 20 AMP messages for atlas/claude from AI Maestro."""
+    messages = await _fetch_maestro_messages()
+    return {"messages": messages}
+
+
+class AmpSendRequest(BaseModel):
+    recipient: str
+    subject: str
+    message: str
+    type: str = "notification"
+
+
+@app.post("/api/amp/send")
+async def api_amp_send(req: AmpSendRequest):
+    """Send an AMP message via amp-send CLI."""
+    amp_bin = "/Users/iris/.local/bin/amp-send"
+    env = {**os.environ, "PATH": f"/Users/iris/.local/bin:{os.environ.get('PATH', '')}"}
+    try:
+        result = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: subprocess.run(
+                [amp_bin, req.recipient, req.subject, req.message, "--type", req.type],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                env=env,
+            ),
+        )
+        if result.returncode != 0:
+            err = result.stderr.strip() or f"exit {result.returncode}"
+            return {"ok": False, "error": err}
+        return {"ok": True, "output": result.stdout.strip()}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
 @app.get("/api/hermes")
 async def api_hermes():
     status = await asyncio.get_event_loop().run_in_executor(None, _fetch_hermes_status)
