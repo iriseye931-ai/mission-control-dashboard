@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useDashboardStore } from '../store/dashboardStore'
-import { StatusUpdate } from '../types'
+import { StatusUpdate, MeshInsight } from '../types'
 
 const WS_URL = '/ws'
 
@@ -32,22 +32,31 @@ export const useWebSocket = () => {
     ws.onmessage = (event) => {
       if (unmountedRef.current) return
       try {
-        const msg: StatusUpdate = JSON.parse(event.data)
-        const { setAgents, setServices, setCronJobs, setMemories, setLastUpdate, setLlmActive, setVoiceActive, setSystem, setMemoryMonitorLog, setLogs, setAmpMessages, setHermesStatus } =
+        const msg = JSON.parse(event.data)
+        const { setAgents, setServices, setCronJobs, setMemories, setLastUpdate, setLlmActive, setVoiceActive, setSystem, setMemoryMonitorLog, setLogs, setAmpMessages, setHermesStatus, setTrendingRepos, addInsight, setInsights } =
           useDashboardStore.getState()
         setLastUpdate(new Date())
+
+        if (msg.type === 'insight') {
+          addInsight(msg.insight as MeshInsight)
+          return
+        }
+
         if (msg.type === 'status_update') {
-          if (msg.agents) setAgents(msg.agents)
-          if (msg.services) setServices(msg.services)
-          if (msg.cron_jobs) setCronJobs(msg.cron_jobs)
-          if (msg.memories) setMemories(msg.memories)
-          if (msg.llm_active !== undefined) setLlmActive(msg.llm_active ?? null)
-          if (msg.voice_active !== undefined) setVoiceActive(msg.voice_active)
-          if (msg.system) setSystem(msg.system)
-          if (msg.memory_monitor_log) setMemoryMonitorLog(msg.memory_monitor_log)
-          if (msg.logs) setLogs(msg.logs)
-          if (msg.amp_messages) setAmpMessages(msg.amp_messages)
-          if (msg.hermes_status) setHermesStatus(msg.hermes_status)
+          const su = msg as StatusUpdate
+          if (su.agents) setAgents(su.agents)
+          if (su.services) setServices(su.services)
+          if (su.cron_jobs) setCronJobs(su.cron_jobs)
+          if (su.memories) setMemories(su.memories)
+          if (su.llm_active !== undefined) setLlmActive(su.llm_active ?? null)
+          if (su.voice_active !== undefined) setVoiceActive(su.voice_active)
+          if (su.system) setSystem(su.system)
+          if (su.memory_monitor_log) setMemoryMonitorLog(su.memory_monitor_log)
+          if (su.logs) setLogs(su.logs)
+          if (su.amp_messages) setAmpMessages(su.amp_messages)
+          if (su.hermes_status) setHermesStatus(su.hermes_status)
+          if (su.trending_repos) setTrendingRepos(su.trending_repos)
+          if (su.insights) setInsights(su.insights)
         }
       } catch {
         // malformed message — ignore

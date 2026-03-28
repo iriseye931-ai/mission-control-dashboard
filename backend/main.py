@@ -15,6 +15,9 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, AsyncGenerator
 
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).parent / ".env")
+
 import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,6 +31,9 @@ from pydantic import BaseModel
 OPENVIKING_URL = os.getenv("OPENVIKING_URL", "http://127.0.0.1:1933")
 OPENVIKING_HEALTH = f"{OPENVIKING_URL}/health"
 OPENVIKING_KEY = os.getenv("OPENVIKING_KEY", "")
+OPENVIKING_ACCOUNT = os.getenv("OPENVIKING_ACCOUNT", "teamirs")
+OPENVIKING_USER = os.getenv("OPENVIKING_USER", "iris")
+RAG_INBOX = Path.home() / "Documents" / "rag" / "inbox"
 
 MEMORY_MCP_URL = os.getenv("MEMORY_MCP_URL", "http://127.0.0.1:2033/mcp")
 OPENCLAW_MCP_URL = os.getenv("OPENCLAW_MCP_URL", "http://127.0.0.1:2034/mcp")
@@ -901,6 +907,22 @@ async def _build_brief_context() -> str:
             content = m.get("content", m.get("text", str(m)))[:120]
             lines.append(f"  - {content}")
 
+    # Pending items from subconscious
+    pending_path = Path.home() / ".claude" / "subconscious" / "pending_items.md"
+    if pending_path.exists():
+        pending_text = pending_path.read_text().strip()
+        if pending_text:
+            lines.append("\n## Pending Items")
+            # Extract only In Progress + Backlog sections, skip Completed
+            in_section = False
+            for line in pending_text.split("\n"):
+                if line.startswith("## Completed") or line.startswith("## Deferred"):
+                    in_section = False
+                elif line.startswith("##"):
+                    in_section = "completed" not in line.lower() and "deferred" not in line.lower()
+                elif in_section and line.strip():
+                    lines.append(f"  {line}")
+
     # System snapshot
     system = _state.get("system", {})
     if system:
@@ -933,7 +955,7 @@ async def _generate_brief(force: bool = False) -> str:
         {
             "role": "system",
             "content": (
-                "You are Atlas, lead AI agent. Generate a concise morning brief for Iris "
+                "You are Atlas, lead AI agent. Generate a concise morning brief for Punch "
                 "(the operator). Cover: what changed overnight, what needs attention, "
                 "what's healthy. Be direct and specific. Max 200 words. No fluff."
             ),
@@ -1233,6 +1255,127 @@ async def api_stt(file: UploadFile = File(...)):
             return resp.json()
     except Exception as exc:
         return {"error": f"STT unavailable: {exc}", "text": ""}
+
+
+# ---------------------------------------------------------------------------
+# RAG — Document search via OpenViking
+# ---------------------------------------------------------------------------
+
+def _ov_headers() -> dict:
+    h = {"X-OpenViking-Account": OPENVIKING_ACCOUNT, "X-OpenViking-User": OPENVIKING_USER}
+    if OPENVIKING_KEY:
+        h["Authorization"] = f"Bearer {OPENVIKING_KEY}"
+    return h
+
+
+class RAGSearchRequest(BaseModel):
+    query: str
+    limit: int = 8
+
+
+class RAGIngestRequest(BaseModel):
+    path: str | None = None
+
+
+@app.post("/api/rag/search")
+async def api_rag_search(req: RAGSearchRequest):
+    """Semantic search across documents in OpenViking RAG inbox."""
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{OPENVIKING_URL}/api/v1/search/search",
+                headers=_ov_headers(),
+                json={"query": req.query, "limit": req.limit},
+            )
+            if resp.status_code != 200:
+                return {"error": f"Search error {resp.status_code}", "results": []}
+            data = resp.json()
+            result = data.get("result", {})
+            # Combine memories and resources, prefer resources for doc search
+            items = result.get("resources", []) + result.get("memories", [])
+            results = [
+                {
+                    "uri": r.get("uri", ""),
+                    "score": round(r.get("score", 0), 4),
+                    "abstract": r.get("abstract", ""),
+                    "context_type": r.get("context_type", ""),
+                }
+                for r in items[:req.limit]
+            ]
+            return {"results": results}
+    except Exception as exc:
+        return {"error": str(exc), "results": []}
+
+
+@app.post("/api/rag/ingest")
+async def api_rag_ingest(req: RAGIngestRequest):
+    """
+    Scan inbox and upload any files not yet in OpenViking.
+    Uses temp_upload → resources/parent flow which correctly indexes content.
+    If req.path is set, ingest only that file; otherwise scan the whole inbox.
+    """
+    RAG_INBOX.mkdir(parents=True, exist_ok=True)
+
+    if req.path:
+        files_to_ingest = [Path(req.path)]
+    else:
+        files_to_ingest = [f for f in RAG_INBOX.iterdir() if f.is_file()]
+
+    if not files_to_ingest:
+        return {"ok": True, "ingested": 0, "message": "Inbox is empty"}
+
+    ingested = 0
+    errors = []
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for fpath in files_to_ingest:
+            try:
+                # Step 1: temp upload
+                with open(fpath, "rb") as fh:
+                    up = await client.post(
+                        f"{OPENVIKING_URL}/api/v1/resources/temp_upload",
+                        headers=_ov_headers(),
+                        files={"file": (fpath.name, fh, "application/octet-stream")},
+                    )
+                if up.status_code != 200:
+                    errors.append(f"{fpath.name}: upload failed {up.status_code}")
+                    continue
+                temp_path = up.json().get("result", {}).get("temp_path")
+                if not temp_path:
+                    errors.append(f"{fpath.name}: no temp_path")
+                    continue
+
+                # Step 2: register under rag-inbox parent
+                add = await client.post(
+                    f"{OPENVIKING_URL}/api/v1/resources",
+                    headers=_ov_headers(),
+                    json={
+                        "temp_path": temp_path,
+                        "parent": "viking://resources/rag-inbox",
+                        "reason": f"RAG inbox: {fpath.name}",
+                    },
+                )
+                if add.status_code == 200:
+                    ingested += 1
+                else:
+                    errors.append(f"{fpath.name}: register failed {add.status_code}")
+            except Exception as exc:
+                errors.append(f"{fpath.name}: {exc}")
+
+    return {"ok": True, "ingested": ingested, "errors": errors}
+
+
+@app.get("/api/rag/status")
+async def api_rag_status():
+    """Returns count of files in inbox and whether OpenViking is reachable."""
+    RAG_INBOX.mkdir(parents=True, exist_ok=True)
+    files = list(RAG_INBOX.iterdir())
+    inbox_count = len([f for f in files if f.is_file()])
+    return {
+        "inbox_path": str(RAG_INBOX),
+        "inbox_count": inbox_count,
+        "inbox_files": [f.name for f in files if f.is_file()][:20],
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -89,6 +89,25 @@ export interface MeshLogs {
   memory: string[]
 }
 
+export interface MeshInsight {
+  timestamp: string
+  severity: 'info' | 'warning' | 'critical'
+  summary: string
+  insights: string[]
+  actions: string[]
+}
+
+export interface TrendingRepo {
+  id: number
+  name: string
+  description: string
+  stars: number
+  language: string | null
+  url: string
+  created_at: string
+  topics: string[]
+}
+
 export interface StatusUpdate {
   type: 'status_update'
   timestamp?: string
@@ -103,4 +122,6 @@ export interface StatusUpdate {
   logs?: MeshLogs
   amp_messages?: AmpMessage[]
   hermes_status?: HermesStatus
+  trending_repos?: TrendingRepo[]
+  insights?: MeshInsight[]
 }

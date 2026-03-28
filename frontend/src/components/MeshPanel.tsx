@@ -1,14 +1,16 @@
 import { useState, useRef, useEffect } from 'react'
 import { useDashboardStore } from '../store/dashboardStore'
 import ChatBox from './ChatBox'
+import RAGSearch from './RAGSearch'
 
-type Tab = 'logs' | 'amp' | 'hermes' | 'atlas'
+type Tab = 'logs' | 'amp' | 'hermes' | 'atlas' | 'rag'
 
 const TAB_LABELS: { id: Tab; label: string }[] = [
   { id: 'logs', label: 'Logs' },
   { id: 'amp', label: 'AMP' },
   { id: 'hermes', label: 'Hermes' },
   { id: 'atlas', label: 'Atlas' },
+  { id: 'rag', label: 'RAG' },
 ]
 
 function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void }) {
@@ -25,10 +27,10 @@ function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void 
             textTransform: 'uppercase',
             fontFamily: 'monospace',
             border: 'none',
-            borderBottom: active === id ? '1px solid #06b6d4' : '1px solid transparent',
+            borderBottom: active === id ? `1px solid ${id === 'rag' ? '#8b5cf6' : '#06b6d4'}` : '1px solid transparent',
             marginBottom: -1,
             background: 'transparent',
-            color: active === id ? '#06b6d4' : '#475569',
+            color: active === id ? (id === 'rag' ? '#8b5cf6' : '#06b6d4') : '#475569',
             cursor: 'pointer',
           }}
         >
@@ -184,6 +186,11 @@ export default function MeshPanel() {
       {activeTab === 'atlas' && (
         <div style={{ flex: 1, padding: '8px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           <ChatBox />
+        </div>
+      )}
+      {activeTab === 'rag' && (
+        <div style={{ flex: 1, padding: '8px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          <RAGSearch />
         </div>
       )}
     </div>
