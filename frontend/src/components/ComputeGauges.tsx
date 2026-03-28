@@ -68,48 +68,50 @@ function ArcGauge({ label, value, color, sublabel, size = 80 }: GaugeProps) {
   )
 }
 
+function StatRow({ label, value, accent }: { label: string; value: string; accent?: string }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: '1px solid #0f172a' }}>
+      <span style={{ fontSize: 9, color: '#475569', fontFamily: 'monospace', letterSpacing: '0.08em', textTransform: 'uppercase' }}>{label}</span>
+      <span style={{ fontSize: 10, color: accent ?? '#94a3b8', fontFamily: 'monospace', fontWeight: 600 }}>{value}</span>
+    </div>
+  )
+}
+
 export default function ComputeGauges() {
-  const system = useDashboardStore((s) => s.system)
+  const system   = useDashboardStore((s) => s.system)
   const llmActive = useDashboardStore((s) => s.llmActive)
 
   if (!system) {
-    return (
-      <div style={{ color: '#475569', fontSize: 11, fontFamily: 'ui-monospace, monospace', textAlign: 'center', padding: '8px' }}>
-        loading metrics…
-      </div>
-    )
+    return <div style={{ color: '#475569', fontSize: 11, fontFamily: 'ui-monospace, monospace', padding: 8 }}>loading…</div>
   }
 
-  const localLabel = llmActive === 'mlx'
-    ? `MLX ${system.mlx_ram_gb}GB`
-    : 'local LLM'
+  const modelName = llmActive === 'mlx' ? 'Qwen3.5 35B-A3B' : 'local LLM'
+  const ramColor  = system.mlx_ram_pct > 85 ? '#ef4444' : system.mlx_ram_pct > 65 ? '#f59e0b' : '#10b981'
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <p style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#475569', margin: 0 }}>
-        Compute
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <p style={{ fontSize: 9, fontWeight: 600, letterSpacing: '0.14em', textTransform: 'uppercase', color: '#475569', margin: 0 }}>
+        MLX Inference
       </p>
-      <div style={{ display: 'flex', gap: 8, justifyContent: 'space-around', flexWrap: 'wrap' }}>
+
+      {/* Big MLX RAM gauge — center stage */}
+      <div style={{ display: 'flex', justifyContent: 'center' }}>
         <ArcGauge
-          label="RAM"
-          value={system.ram_pct}
-          color="#06b6d4"
-          sublabel={`${system.ram_used_gb}/${system.ram_total_gb}GB`}
-          size={80}
-        />
-        <ArcGauge
-          label="CPU"
-          value={system.cpu_pct}
-          color="#a855f7"
-          size={80}
-        />
-        <ArcGauge
-          label="Local LLM"
+          label="MLX RAM"
           value={system.mlx_ram_pct}
-          color="#10b981"
-          sublabel={localLabel}
-          size={80}
+          color={ramColor}
+          sublabel={`${system.mlx_ram_gb} GB used`}
+          size={110}
         />
+      </div>
+
+      {/* Stats */}
+      <div style={{ display: 'flex', flexDirection: 'column' }}>
+        <StatRow label="Model"    value={modelName}                              accent="#10b981" />
+        <StatRow label="RAM"      value={`${system.ram_used_gb} / ${system.ram_total_gb} GB`} />
+        <StatRow label="PID"      value={system.mlx_pid ? String(system.mlx_pid) : 'not running'} accent={system.mlx_pid ? '#06b6d4' : '#ef4444'} />
+        <StatRow label="Engine"   value={llmActive ?? 'idle'}                    accent={llmActive ? '#a855f7' : '#334155'} />
+        <StatRow label="Local"    value={`${Math.round(system.local_pct)}%`} />
       </div>
     </div>
   )

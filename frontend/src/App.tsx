@@ -157,7 +157,7 @@ function KpiStrip() {
 type RightTab = 'system' | 'memory' | 'schedule' | 'insights' | 'activity'
 
 const RIGHT_TABS: { id: RightTab; label: string }[] = [
-  { id: 'system',   label: 'System'   },
+  { id: 'system',   label: 'MLX'      },
   { id: 'memory',   label: 'Memory'   },
   { id: 'schedule', label: 'Schedule' },
   { id: 'insights', label: 'Insights' },
