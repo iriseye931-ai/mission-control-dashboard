@@ -3,8 +3,13 @@
 @tailwind utilities;
 
 :root {
-  background: #0a0a0f;
+  background: #08080f;
   color: #e2e8f0;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; box-shadow: inherit; }
+  50% { opacity: 0.5; }
 }
 
 * {
