@@ -12,6 +12,70 @@ import ComputeGauges from './components/ComputeGauges'
 import MemoryMonitorLog from './components/MemoryMonitorLog'
 import MeshInsights from './components/MeshInsights'
 
+type RightTab = 'system' | 'memory' | 'schedule' | 'insights' | 'activity'
+
+const RIGHT_TABS: { id: RightTab; label: string }[] = [
+  { id: 'system',   label: 'System'   },
+  { id: 'memory',   label: 'Memory'   },
+  { id: 'schedule', label: 'Schedule' },
+  { id: 'insights', label: 'Insights' },
+  { id: 'activity', label: 'Activity' },
+]
+
+function RightPanel() {
+  const [tab, setTab] = useState<RightTab>('system')
+  return (
+    <aside
+      className="flex shrink-0 overflow-hidden"
+      style={{ width: 280, borderLeft: '1px solid #1e1e2e' }}
+    >
+      {/* vertical tab rail */}
+      <div
+        className="flex flex-col shrink-0"
+        style={{ width: 72, borderRight: '1px solid #1e1e2e', paddingTop: 8 }}
+      >
+        {RIGHT_TABS.map(({ id, label }) => (
+          <button
+            key={id}
+            onClick={() => setTab(id)}
+            style={{
+              background: 'none',
+              border: 'none',
+              borderLeft: tab === id ? '2px solid #06b6d4' : '2px solid transparent',
+              color: tab === id ? '#06b6d4' : '#334155',
+              fontSize: 9,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+              fontFamily: 'ui-monospace, monospace',
+              padding: '10px 0',
+              cursor: 'pointer',
+              textAlign: 'center',
+              width: '100%',
+              transition: 'color 0.15s',
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* tab content — fills height, no scroll */}
+      <div className="flex-1 flex flex-col overflow-hidden min-h-0 p-3">
+        {tab === 'system'   && <ComputeGauges />}
+        {tab === 'memory'   && <MemoryMonitorLog />}
+        {tab === 'schedule' && (
+          <div className="flex flex-col gap-2 overflow-hidden">
+            <p style={{ fontSize: 9, color: '#475569', fontFamily: 'monospace', letterSpacing: '0.12em', textTransform: 'uppercase', flexShrink: 0 }}>Scheduled</p>
+            <CronProgress />
+          </div>
+        )}
+        {tab === 'insights' && <MeshInsights />}
+        {tab === 'activity' && <div className="flex flex-col flex-1 overflow-hidden min-h-0"><ActivityFeed /></div>}
+      </div>
+    </aside>
+  )
+}
+
 function Clock() {
   const [time, setTime] = useState(() => new Date().toLocaleTimeString())
   useEffect(() => {
@@ -73,8 +137,8 @@ export default function App() {
 
         {/* LEFT: services + agents */}
         <aside
-          className="flex flex-col gap-4 p-4 overflow-y-auto shrink-0"
-          style={{ width: 220, borderRight: '1px solid #1e1e2e' }}
+          className="flex flex-col gap-3 p-3 overflow-hidden shrink-0"
+          style={{ width: 210, borderRight: '1px solid #1e1e2e' }}
         >
           <div>
             <p className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: '#475569' }}>
@@ -129,32 +193,7 @@ export default function App() {
           </div>
         </main>
 
-        {/* RIGHT: compute + cron + activity */}
-        <aside
-          className="flex flex-col gap-4 p-4 overflow-y-auto shrink-0"
-          style={{ width: 260, borderLeft: '1px solid #1e1e2e' }}
-        >
-          <ComputeGauges />
-
-          <div style={{ borderTop: '1px solid #1e1e2e', paddingTop: 12 }}>
-            <MemoryMonitorLog />
-          </div>
-
-          <div style={{ borderTop: '1px solid #1e1e2e', paddingTop: 12 }}>
-            <p className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: '#475569' }}>
-              Scheduled
-            </p>
-            <CronProgress />
-          </div>
-
-          <div style={{ borderTop: '1px solid #1e1e2e', paddingTop: 12 }}>
-            <MeshInsights />
-          </div>
-
-          <div style={{ borderTop: '1px solid #1e1e2e', paddingTop: 12, flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-            <ActivityFeed />
-          </div>
-        </aside>
+        <RightPanel />
 
       </div>
     </div>
