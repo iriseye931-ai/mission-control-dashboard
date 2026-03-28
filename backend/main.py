@@ -40,6 +40,8 @@ AMP_AGENTS_DIR = Path.home() / ".agent-messaging" / "agents"
 HERMES_SESSIONS_DIR = Path.home() / ".hermes" / "sessions"
 
 MLX_SERVER_URL = os.getenv("MLX_SERVER_URL", "http://127.0.0.1:8081")
+WHISPER_STT_URL = os.getenv("WHISPER_STT_URL", "http://127.0.0.1:8082")
+WHISPER_HEALTH = f"{WHISPER_STT_URL}/health"
 MLX_MODELS_URL = f"{MLX_SERVER_URL}/v1/models"
 
 CRON_JOBS_PATH = Path.home() / ".hermes" / "cron" / "jobs.json"
@@ -217,6 +219,20 @@ async def _fetch_service_health(client: httpx.AsyncClient) -> dict[str, Any]:
 
     # Track which LLM backend is active
     _state["llm_active"] = "mlx" if mlx_up else None
+
+    # Whisper STT server
+    try:
+        r = await client.get(WHISPER_HEALTH, timeout=HTTP_TIMEOUT)
+        body = r.json()
+        services["whisper_stt"] = {
+            "name": "Whisper STT",
+            "url": WHISPER_HEALTH,
+            "status": "up" if body.get("status") == "ok" else "degraded",
+            "model": body.get("model", "unknown"),
+            "loaded": body.get("loaded", False),
+        }
+    except Exception as exc:
+        services["whisper_stt"] = {"name": "Whisper STT", "status": "down", "error": str(exc)}
 
     return services
 
