@@ -15,6 +15,7 @@ const SERVICE_COLORS: Record<string, string> = {
   memory_mcp:   '#a855f7',
   openclaw_mcp: '#10b981',
   ollama:       '#6366f1',
+  aimaestro:    '#f59e0b',
 }
 
 const SERVICE_LABELS: Record<string, string> = {
@@ -23,6 +24,7 @@ const SERVICE_LABELS: Record<string, string> = {
   memory_mcp:   'Mem MCP',
   openclaw_mcp: 'OpenClaw',
   ollama:       'Ollama',
+  aimaestro:    'AI Maestro',
 }
 
 // Radial layout — center (0.50, 0.48), services on outer ring r=0.32, agents inner r=0.14
@@ -42,7 +44,7 @@ const SERVICE_POSITIONS: Record<string, [number, number]> = {
   openclaw_mcp: [CX + 0.32 * 0.866,    CY + 0.32 * 0.5],   // lower-right
   ollama:       [CX,                    CY + 0.32],          // bottom
   memory_mcp:   [CX - 0.32 * 0.866,    CY + 0.32 * 0.5],   // lower-left
-  // upper-left intentionally empty — clean layout with 5 services
+  aimaestro:    [CX - 0.32 * 0.866,    CY - 0.32 * 0.5],   // upper-left
 }
 
 // which services connect to which agents
@@ -58,6 +60,8 @@ const SERVICE_EDGES: Array<[string, string]> = [
   ['openclaw_mcp', 'iriseye'],
   ['openclaw_mcp', 'atlas'],
   ['ollama', 'openviking'],
+  ['aimaestro', 'hermes'],
+  ['aimaestro', 'iriseye'],
 ]
 
 // agent-to-agent edges

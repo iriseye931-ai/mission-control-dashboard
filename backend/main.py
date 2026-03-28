@@ -240,6 +240,19 @@ async def _fetch_service_health(client: httpx.AsyncClient) -> dict[str, Any]:
     except Exception as exc:
         services["whisper_stt"] = {"name": "Whisper STT", "status": "down", "error": str(exc)}
 
+    # AI Maestro (AMP routing hub)
+    try:
+        r = await client.get(f"{AI_MAESTRO_URL}/health", timeout=HTTP_TIMEOUT)
+        body = r.json()
+        services["aimaestro"] = {
+            "name": "AI Maestro",
+            "url": AI_MAESTRO_URL,
+            "status": "up" if body.get("status") in ("ok", "healthy") else "degraded",
+            "detail": body,
+        }
+    except Exception as exc:
+        services["aimaestro"] = {"name": "AI Maestro", "status": "down", "error": str(exc)}
+
     return services
 
 

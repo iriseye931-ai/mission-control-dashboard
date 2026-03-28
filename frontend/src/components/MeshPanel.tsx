@@ -88,34 +88,79 @@ function LogsTab() {
 
 function HermesTab() {
   const status = useDashboardStore((s) => s.hermesStatus)
+  const cronJobs = useDashboardStore((s) => s.cronJobs)
 
-  if (!status || status.status === 'unavailable' || status.status === 'no sessions') {
-    return <p style={{ fontSize: 10, color: '#334155', padding: 12 }}>No Hermes sessions found in ~/.hermes/sessions/</p>
+  const nextJob = cronJobs
+    .filter((j) => j.enabled !== false && j.next_run_in_seconds != null)
+    .sort((a, b) => (a.next_run_in_seconds ?? Infinity) - (b.next_run_in_seconds ?? Infinity))[0]
+
+  function fmtIn(secs: number | null | undefined) {
+    if (secs == null) return '—'
+    if (secs < 60) return `${secs}s`
+    if (secs < 3600) return `${Math.floor(secs / 60)}m`
+    return `${Math.floor(secs / 3600)}h`
   }
 
-  const fields: [string, string | number | undefined | null][] = [
-    ['Status', status.status],
-    ['Session', status.session_id],
-    ['Model', status.model],
-    ['Task', status.task],
-    ['Created', status.created_at ? new Date(status.created_at).toLocaleString() : undefined],
-    ['Modified', status.modified ? new Date(status.modified * 1000).toLocaleString() : undefined],
-  ]
+  const showSession = status && status.status !== 'unavailable' && status.status !== 'no sessions'
+
+  const fields: [string, string | number | undefined | null][] = showSession ? [
+    ['Status', status!.status],
+    ['Session', status!.session_id],
+    ['Model', status!.model],
+    ['Task', status!.task],
+    ['Created', status!.created_at ? new Date(status!.created_at).toLocaleString() : undefined],
+    ['Modified', status!.modified ? new Date(status!.modified * 1000).toLocaleString() : undefined],
+  ] : []
 
   return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: '12px 10px' }}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {fields.filter(([, v]) => v != null && v !== '').map(([label, value]) => (
-          <div key={label} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-            <span style={{ fontSize: 9, color: '#475569', fontFamily: 'monospace', width: 60, flexShrink: 0, textAlign: 'right' }}>
-              {label}
-            </span>
-            <span style={{ fontSize: 9, color: '#94a3b8', fontFamily: 'monospace', wordBreak: 'break-all', lineHeight: 1.5 }}>
-              {String(value)}
-            </span>
+    <div style={{ flex: 1, overflowY: 'auto', padding: '12px 10px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {cronJobs.length > 0 && (
+        <div>
+          <p style={{ fontSize: 9, color: '#475569', fontFamily: 'monospace', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 6 }}>
+            Cron ({cronJobs.length} jobs)
+          </p>
+          {nextJob && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid #0f172a' }}>
+              <span style={{ fontSize: 9, color: '#64748b', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '70%' }}>
+                {nextJob.name}
+              </span>
+              <span style={{ fontSize: 9, color: '#06b6d4', fontFamily: 'monospace', flexShrink: 0 }}>
+                in {fmtIn(nextJob.next_run_in_seconds)}
+              </span>
+            </div>
+          )}
+          {cronJobs.slice(0, 4).map((job) => (
+            <div key={job.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', borderBottom: '1px solid #0a0a14' }}>
+              <span style={{ fontSize: 8, color: '#334155', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '70%' }}>
+                {job.name}
+              </span>
+              <span style={{ fontSize: 8, color: job.last_status === 'success' ? '#10b981' : job.last_status ? '#f59e0b' : '#334155', fontFamily: 'monospace', flexShrink: 0 }}>
+                {job.last_status ?? '—'}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {showSession ? (
+        <div>
+          <p style={{ fontSize: 9, color: '#475569', fontFamily: 'monospace', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 6 }}>Session</p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {fields.filter(([, v]) => v != null && v !== '').map(([label, value]) => (
+              <div key={label} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <span style={{ fontSize: 9, color: '#475569', fontFamily: 'monospace', width: 60, flexShrink: 0, textAlign: 'right' }}>
+                  {label}
+                </span>
+                <span style={{ fontSize: 9, color: '#94a3b8', fontFamily: 'monospace', wordBreak: 'break-all', lineHeight: 1.5 }}>
+                  {String(value)}
+                </span>
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
+        </div>
+      ) : (
+        <p style={{ fontSize: 10, color: '#334155' }}>No active Hermes session</p>
+      )}
     </div>
   )
 }

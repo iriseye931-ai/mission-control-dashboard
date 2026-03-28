@@ -9,6 +9,7 @@ import MeshGraph from './components/MeshGraph'
 import ComputeGauges from './components/ComputeGauges'
 import MemoryMonitorLog from './components/MemoryMonitorLog'
 import MeshInsights from './components/MeshInsights'
+import MorningBrief from './components/MorningBrief'
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 const C = {
@@ -106,7 +107,7 @@ function KpiStrip() {
         <KpiCard label="Agents Online" value={`${onlineCount}/${agents.length || '—'}`} accent={C.cyan} />
         <KpiCard label="MLX Server"    value={mlxUp ? 'UP' : 'DOWN'} accent={mlxUp ? C.green : C.red} sub="Qwen3.5 35B" />
         <KpiCard label="Memory"        value={mem}  accent={C.purple} sub="system RAM" />
-        <KpiCard label="AMP Messages"  value={ampMessages.length || '—'} accent={C.yellow} sub="in queue" />
+        <KpiCard label="AMP Messages"  value={ampMessages.length || '—'} accent={C.yellow} sub="from maestro" />
         <KpiCard label="CPU"           value={cpu}  accent={C.cyan}   sub="utilization" />
       </div>
 
@@ -154,14 +155,14 @@ function KpiStrip() {
 }
 
 // ── Right Panel ───────────────────────────────────────────────────────────────
-type RightTab = 'system' | 'memory' | 'schedule' | 'insights' | 'activity'
+type RightTab = 'system' | 'memory' | 'schedule' | 'insights' | 'recalls'
 
 const RIGHT_TABS: { id: RightTab; label: string }[] = [
   { id: 'system',   label: 'MLX'      },
   { id: 'memory',   label: 'Memory'   },
   { id: 'schedule', label: 'Schedule' },
   { id: 'insights', label: 'Insights' },
-  { id: 'activity', label: 'Activity' },
+  { id: 'recalls',  label: 'Recalls'  },
 ]
 
 function RightPanel() {
@@ -197,23 +198,47 @@ function RightPanel() {
           <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
             <p style={{ fontSize: 9, color: C.textSec, fontFamily: 'monospace', letterSpacing: '0.12em', textTransform: 'uppercase', flexShrink: 0 }}>Scheduled</p>
             <CronProgress />
+            <MorningBrief />
           </div>
         )}
         {tab === 'insights' && <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}><MeshInsights /></div>}
-        {tab === 'activity' && <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}><ActivityFeed /></div>}
+        {tab === 'recalls' && <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}><ActivityFeed /></div>}
       </div>
     </aside>
   )
 }
 
-// ── Clock ─────────────────────────────────────────────────────────────────────
+// ── Clock + data freshness ────────────────────────────────────────────────────
 function Clock() {
+  const lastUpdate = useDashboardStore((s) => s.lastUpdate)
   const [time, setTime] = useState(() => new Date().toLocaleTimeString())
+  const [age, setAge] = useState<string>('')
+
   useEffect(() => {
-    const id = setInterval(() => setTime(new Date().toLocaleTimeString()), 1000)
+    const id = setInterval(() => {
+      setTime(new Date().toLocaleTimeString())
+      if (lastUpdate) {
+        const secs = Math.floor((Date.now() - lastUpdate.getTime()) / 1000)
+        setAge(secs < 5 ? 'live' : `${secs}s ago`)
+      }
+    }, 1000)
     return () => clearInterval(id)
-  }, [])
-  return <span style={{ fontSize: 11, color: C.textSec, fontVariantNumeric: 'tabular-nums' }}>{time}</span>
+  }, [lastUpdate])
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      {age && (
+        <span style={{
+          fontSize: 9,
+          color: age === 'live' ? C.green : parseInt(age) > 30 ? C.red : C.textSec,
+          fontFamily: 'ui-monospace, monospace', letterSpacing: '0.06em',
+        }}>
+          {age}
+        </span>
+      )}
+      <span style={{ fontSize: 11, color: C.textSec, fontVariantNumeric: 'tabular-nums' }}>{time}</span>
+    </div>
+  )
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────

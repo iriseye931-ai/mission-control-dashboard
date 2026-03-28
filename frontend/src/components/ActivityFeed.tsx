@@ -43,7 +43,7 @@ export default function ActivityFeed() {
         className="text-xs font-semibold uppercase tracking-widest pt-4 pb-1"
         style={{ color: '#475569' }}
       >
-        Recent Memories
+        Memory Recalls
       </h2>
 
       <div className="flex-1 overflow-y-auto" style={{ minHeight: 0 }}>
