@@ -145,8 +145,14 @@ export default function MeshGraph() {
       }
       ctx.restore()
 
-      // helper: canvas coords
-      const pos = (frac: [number, number]): [number, number] => [frac[0] * W, frac[1] * H]
+      // helper: canvas coords — square viewport centered in canvas so graph never stretches
+      const size = Math.min(W, H) * 0.92
+      const ox = (W - size) / 2
+      const oy = (H - size) / 2
+      const pos = (frac: [number, number]): [number, number] => [
+        ox + frac[0] * size,
+        oy + frac[1] * size,
+      ]
 
       // ── Draw edges ──────────────────────────────────────────────────────
       const drawEdge = (
