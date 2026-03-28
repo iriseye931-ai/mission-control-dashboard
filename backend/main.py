@@ -11,13 +11,14 @@ import shutil
 import subprocess
 import re
 import psutil
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncGenerator
 
 import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
@@ -48,10 +49,13 @@ HERMES_SESSIONS_PATH = Path.home() / ".hermes" / "sessions"
 HTTP_TIMEOUT = 3.0
 POLL_INTERVAL = 10  # seconds
 
+GITHUB_SEARCH_URL = "https://api.github.com/search/repositories"
+TRENDING_CACHE_TTL = 6 * 3600  # 6 hours
+
 MCP_PING = {"jsonrpc": "2.0", "id": 0, "method": "ping"}
 MCP_HEADERS = {"Content-Type": "application/json", "Accept": "application/json"}
 
-MESH_OPERATOR = os.getenv("MESH_OPERATOR", "the operator")
+MESH_OPERATOR = os.getenv("MESH_OPERATOR", "Punch")
 
 ATLAS_SYSTEM_PROMPT = """You are Atlas — the lead AI agent in a local AI mesh. You are accessed via the Mission Control Dashboard. Be direct, concise, technical.
 
@@ -80,6 +84,9 @@ app.add_middleware(
 # Shared state — updated by background tasks, read by endpoints/WS
 # ---------------------------------------------------------------------------
 
+_insights: list[dict] = []  # last 20 from mesh-subconscious
+_brief_cache: dict[str, Any] = {"text": "", "generated_at": None}  # morning brief
+
 _state: dict[str, Any] = {
     "services": {},
     "agents": [],
@@ -94,7 +101,10 @@ _state: dict[str, Any] = {
     "voice_active": False,
     "last_updated": None,
     "system": {},
+    "trending_repos": [],
 }
+
+_trending_cache_time: float = 0.0
 
 _ws_clients: set[WebSocket] = set()
 _ws_lock = asyncio.Lock()
@@ -522,6 +532,51 @@ def _fetch_memory_monitor_log(n: int = 50) -> list[str]:
         return []
 
 
+async def _fetch_trending_repos(client: httpx.AsyncClient) -> list[dict[str, Any]]:
+    """Fetch top 5 trending GitHub repos (new repos last 7 days by stars). Cached 6h."""
+    import time
+    global _trending_cache_time
+
+    if time.monotonic() - _trending_cache_time < TRENDING_CACHE_TTL:
+        return _state["trending_repos"]  # return cached
+
+    try:
+        since = (datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ) - timedelta(days=7)).strftime("%Y-%m-%d")
+
+        r = await client.get(
+            GITHUB_SEARCH_URL,
+            params={
+                "q": f"created:>{since}",
+                "sort": "stars",
+                "order": "desc",
+                "per_page": 5,
+            },
+            headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"},
+            timeout=10.0,
+        )
+        r.raise_for_status()
+        items = r.json().get("items", [])
+        repos = []
+        for item in items:
+            repos.append({
+                "id": item.get("id"),
+                "name": item.get("full_name"),
+                "description": (item.get("description") or "")[:120],
+                "stars": item.get("stargazers_count", 0),
+                "language": item.get("language"),
+                "url": item.get("html_url"),
+                "created_at": item.get("created_at"),
+                "topics": item.get("topics", [])[:4],
+            })
+        _trending_cache_time = time.monotonic()
+        return repos
+    except Exception as exc:
+        print(f"[trending] fetch error: {exc}")
+        return _state.get("trending_repos", [])  # keep stale data on error
+
+
 # ---------------------------------------------------------------------------
 # OpenViking watchdog
 # ---------------------------------------------------------------------------
@@ -603,10 +658,11 @@ async def _poll_loop():
     async with httpx.AsyncClient() as client:
         while True:
             try:
-                services, agents, memories = await asyncio.gather(
+                services, agents, memories, trending_repos = await asyncio.gather(
                     _fetch_service_health(client),
                     _fetch_agents(),
                     _fetch_memories(client),
+                    _fetch_trending_repos(client),
                 )
                 cron_jobs = _read_cron_jobs()
                 voice_active = await asyncio.get_event_loop().run_in_executor(
@@ -630,6 +686,7 @@ async def _poll_loop():
                 _state["amp_messages"] = amp_messages
                 _state["hermes_status"] = hermes_status
                 _state["memory_monitor_log"] = memory_monitor_log
+                _state["trending_repos"] = trending_repos
                 _state["last_updated"] = _now_iso()
 
                 await _broadcast_status()
@@ -637,6 +694,18 @@ async def _poll_loop():
                 print(f"[poll] error: {exc}")
 
             await asyncio.sleep(POLL_INTERVAL)
+
+
+async def _broadcast_insight(insight: dict):
+    data = json.dumps({"type": "insight", "insight": insight})
+    async with _ws_lock:
+        dead: set[WebSocket] = set()
+        for ws in _ws_clients:
+            try:
+                await ws.send_text(data)
+            except Exception:
+                dead.add(ws)
+        _ws_clients.difference_update(dead)
 
 
 async def _broadcast_status():
@@ -654,6 +723,7 @@ async def _broadcast_status():
         "logs": _state["logs"],
         "amp_messages": _state["amp_messages"],
         "hermes_status": _state["hermes_status"],
+        "trending_repos": _state["trending_repos"],
     }
     data = json.dumps(payload)
     async with _ws_lock:
@@ -667,6 +737,209 @@ async def _broadcast_status():
 
 
 # ---------------------------------------------------------------------------
+# MLX chat helpers
+# ---------------------------------------------------------------------------
+
+PROJECTS_DIR = Path.home() / "Projects"
+BRIEF_REFRESH_HOURS = 6  # regenerate brief if older than this
+
+
+def _mlx_model_id() -> str:
+    """Return the first available model ID from the MLX server, fallback string."""
+    try:
+        resp = httpx.get(MLX_MODELS_URL, timeout=2.0)
+        data = resp.json()
+        models = data.get("data", [])
+        if models:
+            return models[0]["id"]
+    except Exception:
+        pass
+    return "local"
+
+
+async def _mlx_chat_stream(
+    messages: list[dict],
+    max_tokens: int = 2048,
+) -> AsyncGenerator[str, None]:
+    """
+    Stream chat completions from MLX server using OpenAI-compatible SSE.
+    Yields SSE-formatted strings: 'data: {...}\n\n'
+    """
+    model = _mlx_model_id()
+    payload = {
+        "model": model,
+        "messages": messages,
+        "stream": True,
+        "max_tokens": max_tokens,
+        "temperature": 0.7,
+    }
+    url = f"{MLX_SERVER_URL}/v1/chat/completions"
+
+    async with httpx.AsyncClient(timeout=None) as client:
+        async with client.stream("POST", url, json=payload) as resp:
+            if resp.status_code != 200:
+                body = await resp.aread()
+                yield f"data: {json.dumps({'error': f'MLX error {resp.status_code}: {body.decode()}'})}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                raw = line[5:].strip()
+                if raw == "[DONE]":
+                    yield "data: [DONE]\n\n"
+                    return
+                try:
+                    chunk = json.loads(raw)
+                    delta = chunk["choices"][0]["delta"]
+                    token = delta.get("content", "")
+                    if token:
+                        yield f"data: {json.dumps({'token': token})}\n\n"
+                except Exception:
+                    continue
+
+
+async def _mlx_chat_complete(messages: list[dict], max_tokens: int = 1024) -> str:
+    """Non-streaming completion from MLX. Returns full response text."""
+    model = _mlx_model_id()
+    payload = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+        "max_tokens": max_tokens,
+        "temperature": 0.3,
+    }
+    url = f"{MLX_SERVER_URL}/v1/chat/completions"
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(url, json=payload)
+            data = resp.json()
+            return data["choices"][0]["message"]["content"].strip()
+    except Exception as exc:
+        return f"[MLX unavailable: {exc}]"
+
+
+def _git_log_since(repo: Path, hours: int = 24) -> list[str]:
+    """Return one-line git log entries from a repo since N hours ago."""
+    try:
+        result = subprocess.run(
+            ["git", "log", f"--since={hours} hours ago", "--oneline", "--no-merges"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        lines = result.stdout.strip().splitlines()
+        return lines[:10]  # cap at 10 per repo
+    except Exception:
+        return []
+
+
+def _collect_git_activity(hours: int = 24) -> dict[str, list[str]]:
+    """Scan ~/Projects for git repos with recent activity."""
+    activity: dict[str, list[str]] = {}
+    if not PROJECTS_DIR.exists():
+        return activity
+    for repo in PROJECTS_DIR.iterdir():
+        if (repo / ".git").exists():
+            commits = _git_log_since(repo, hours)
+            if commits:
+                activity[repo.name] = commits
+    return activity
+
+
+async def _build_brief_context() -> str:
+    """Assemble context for the morning brief."""
+    lines: list[str] = []
+
+    # Git activity
+    activity = _collect_git_activity(24)
+    if activity:
+        lines.append("## Recent Git Activity (last 24h)")
+        for repo, commits in activity.items():
+            lines.append(f"\n**{repo}**")
+            for c in commits:
+                lines.append(f"  - {c}")
+    else:
+        lines.append("## Git Activity\nNo commits in the last 24 hours.")
+
+    # Agent + service state
+    agents = _state.get("agents", [])
+    services = _state.get("services", {})
+    if agents or services:
+        lines.append("\n## Mesh State")
+        for a in agents:
+            status = a.get("status", "unknown")
+            lines.append(f"  - {a.get('name', '?')}: {status}")
+        for svc, info in services.items():
+            st = info.get("status", "?") if isinstance(info, dict) else str(info)
+            lines.append(f"  - {svc}: {st}")
+
+    # Recent memories
+    memories = _state.get("memories", [])
+    if memories:
+        lines.append("\n## Recent Memory Activity")
+        for m in memories[:5]:
+            content = m.get("content", m.get("text", str(m)))[:120]
+            lines.append(f"  - {content}")
+
+    # System snapshot
+    system = _state.get("system", {})
+    if system:
+        cpu = system.get("cpu_percent", "?")
+        ram = system.get("memory_percent", "?")
+        lines.append(f"\n## System\n  CPU: {cpu}%  RAM: {ram}%")
+
+    return "\n".join(lines)
+
+
+async def _generate_brief(force: bool = False) -> str:
+    """Generate or return cached morning brief."""
+    global _brief_cache
+
+    now = datetime.now(timezone.utc)
+    age_ok = False
+    if _brief_cache["generated_at"]:
+        age = (now - _brief_cache["generated_at"]).total_seconds() / 3600
+        age_ok = age < BRIEF_REFRESH_HOURS
+
+    if not force and age_ok and _brief_cache["text"]:
+        return _brief_cache["text"]
+
+    # Wait a bit for state to populate on startup
+    if not _state.get("last_updated"):
+        return "Mesh state loading — try again in a moment."
+
+    context = await _build_brief_context()
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are Atlas, lead AI agent. Generate a concise morning brief for Iris "
+                "(the operator). Cover: what changed overnight, what needs attention, "
+                "what's healthy. Be direct and specific. Max 200 words. No fluff."
+            ),
+        },
+        {"role": "user", "content": f"Current mesh snapshot:\n\n{context}\n\nGenerate the brief."},
+    ]
+
+    text = await _mlx_chat_complete(messages, max_tokens=400)
+    _brief_cache = {"text": text, "generated_at": now}
+    return text
+
+
+async def _generate_brief_on_startup():
+    """Wait for first poll to complete, then generate brief."""
+    # Wait until state is populated (up to 60s)
+    for _ in range(12):
+        await asyncio.sleep(5)
+        if _state.get("last_updated"):
+            break
+    await _generate_brief()
+
+
+# ---------------------------------------------------------------------------
 # Startup / shutdown
 # ---------------------------------------------------------------------------
 
@@ -674,6 +947,7 @@ async def _broadcast_status():
 async def _startup():
     asyncio.create_task(_poll_loop())
     asyncio.create_task(_openviking_watchdog())
+    asyncio.create_task(_generate_brief_on_startup())
     print(f"[startup] Mission Control backend on :8000 — polling every {POLL_INTERVAL}s, watchdog active")
 
 
@@ -740,6 +1014,34 @@ async def api_hermes():
     return status
 
 
+@app.get("/api/trending")
+async def api_trending():
+    return {"repos": _state["trending_repos"], "cached": _trending_cache_time > 0}
+
+
+class InsightPayload(BaseModel):
+    timestamp: str
+    severity: str
+    summary: str
+    insights: list = []
+    actions: list = []
+
+
+@app.post("/api/insights")
+async def api_insights_post(payload: InsightPayload):
+    global _insights
+    record = payload.model_dump()
+    _insights = ([record] + _insights)[:20]
+    # Broadcast to all WS clients immediately
+    await _broadcast_insight(record)
+    return {"ok": True}
+
+
+@app.get("/api/insights")
+async def api_insights_get():
+    return {"insights": _insights}
+
+
 @app.get("/api/status")
 async def api_status():
     jobs = []
@@ -772,11 +1074,38 @@ class ChatRequest(BaseModel):
     history: list[ChatMessage] = []
 
 
+def _build_atlas_messages(req: "ChatRequest") -> list[dict]:
+    """Build OpenAI-format messages for Atlas chat."""
+    mesh_status = json.dumps(
+        {
+            "services": {k: v.get("status") for k, v in _state["services"].items()},
+            "agents": [{"name": a["name"], "status": a["status"]} for a in _state["agents"]],
+            "last_updated": _state["last_updated"],
+        },
+        indent=2,
+    )
+    system_content = ATLAS_SYSTEM_PROMPT.format(mesh_status=mesh_status)
+    messages: list[dict] = [{"role": "system", "content": system_content}]
+    for m in req.history:
+        messages.append({"role": m.role, "content": m.content})
+    messages.append({"role": "user", "content": req.message})
+    return messages
+
+
 @app.post("/api/chat")
 async def api_chat(req: ChatRequest):
+    """Non-streaming chat via MLX (falls back to Claude CLI if MLX is down)."""
+    # Try MLX first
+    if _state.get("llm_active") == "mlx":
+        messages = _build_atlas_messages(req)
+        text = await _mlx_chat_complete(messages)
+        if not text.startswith("[MLX unavailable"):
+            return {"response": text}
+
+    # Fallback: Claude CLI
     claude_bin = shutil.which("claude")
     if not claude_bin:
-        return {"error": "claude CLI not found in PATH"}
+        return {"error": "MLX unavailable and claude CLI not found in PATH"}
 
     mesh_status = json.dumps(
         {
@@ -786,17 +1115,13 @@ async def api_chat(req: ChatRequest):
         },
         indent=2,
     )
-
     system = ATLAS_SYSTEM_PROMPT.format(mesh_status=mesh_status)
-
-    # Build a plain-text prompt: system context + conversation history + new message
     parts = [system, ""]
     for m in req.history:
         prefix = MESH_OPERATOR if m.role == "user" else "Atlas"
         parts.append(f"{prefix}: {m.content}")
     parts.append(f"{MESH_OPERATOR}: {req.message}")
     parts.append("Atlas:")
-
     prompt = "\n".join(parts)
 
     try:
@@ -823,6 +1148,52 @@ async def api_chat(req: ChatRequest):
         return {"error": f"Chat failed: {exc}"}
 
 
+@app.post("/api/chat/stream")
+async def api_chat_stream(req: ChatRequest):
+    """
+    Streaming Atlas chat via MLX server (SSE).
+    Falls back to non-streaming Claude CLI if MLX is down.
+
+    SSE events:
+      data: {"token": "..."}\n\n   — incremental token
+      data: [DONE]\n\n             — stream complete
+      data: {"error": "..."}\n\n   — error
+    """
+    if _state.get("llm_active") != "mlx":
+        # MLX not up — run non-streaming and emit as single chunk
+        async def _fallback_stream():
+            result = await api_chat(req)
+            text = result.get("response") or result.get("error", "No response")
+            yield f"data: {json.dumps({'token': text})}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(_fallback_stream(), media_type="text/event-stream")
+
+    messages = _build_atlas_messages(req)
+
+    return StreamingResponse(
+        _mlx_chat_stream(messages),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/api/brief")
+async def api_brief(refresh: bool = False):
+    """
+    Return the morning brief. Pass ?refresh=true to force regeneration.
+    The brief is auto-generated at startup and cached for BRIEF_REFRESH_HOURS.
+    """
+    text = await _generate_brief(force=refresh)
+    return {
+        "brief": text,
+        "generated_at": _brief_cache["generated_at"].isoformat() if _brief_cache["generated_at"] else None,
+    }
+
+
 # ---------------------------------------------------------------------------
 # WebSocket
 # ---------------------------------------------------------------------------
@@ -843,6 +1214,8 @@ async def websocket_endpoint(ws: WebSocket):
         "memories": _state["memories"],
         "llm_active": _state["llm_active"],
         "voice_active": _state["voice_active"],
+        "trending_repos": _state["trending_repos"],
+        "insights": _insights,
     }
     try:
         await ws.send_text(json.dumps(payload))

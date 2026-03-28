@@ -1,12 +1,14 @@
 import { useState, useRef, useEffect } from 'react'
 import { useDashboardStore } from '../store/dashboardStore'
+import ChatBox from './ChatBox'
 
-type Tab = 'logs' | 'amp' | 'hermes'
+type Tab = 'logs' | 'amp' | 'hermes' | 'atlas'
 
 const TAB_LABELS: { id: Tab; label: string }[] = [
   { id: 'logs', label: 'Logs' },
   { id: 'amp', label: 'AMP' },
   { id: 'hermes', label: 'Hermes' },
+  { id: 'atlas', label: 'Atlas' },
 ]
 
 function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void }) {
@@ -179,6 +181,11 @@ export default function MeshPanel() {
       {activeTab === 'logs' && <LogsTab />}
       {activeTab === 'amp' && <AmpTab />}
       {activeTab === 'hermes' && <HermesTab />}
+      {activeTab === 'atlas' && (
+        <div style={{ flex: 1, padding: '8px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          <ChatBox />
+        </div>
+      )}
     </div>
   )
 }
