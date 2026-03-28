@@ -10,6 +10,9 @@ import LLMStatus from './components/LLMStatus'
 import MeshGraph from './components/MeshGraph'
 import ComputeGauges from './components/ComputeGauges'
 import MemoryMonitorLog from './components/MemoryMonitorLog'
+import TrendingRepos from './components/TrendingRepos'
+import MeshInsights from './components/MeshInsights'
+import MorningBrief from './components/MorningBrief'
 
 function Clock() {
   const [time, setTime] = useState(() => new Date().toLocaleTimeString())
@@ -122,7 +125,7 @@ export default function App() {
             <MeshGraph />
           </div>
 
-          {/* Mesh Panel — Logs | AMP | Hermes */}
+          {/* Mesh Panel — Logs | AMP | Hermes | Atlas */}
           <div className="flex-1 overflow-hidden min-h-0">
             <MeshPanel />
           </div>
@@ -144,6 +147,16 @@ export default function App() {
               Scheduled
             </p>
             <CronProgress />
+          </div>
+
+          <div style={{ borderTop: '1px solid #1e1e2e', paddingTop: 12 }}>
+            <MeshInsights />
+          </div>
+
+          <MorningBrief />
+
+          <div style={{ borderTop: '1px solid #1e1e2e', paddingTop: 12 }}>
+            <TrendingRepos />
           </div>
 
           <div style={{ borderTop: '1px solid #1e1e2e', paddingTop: 12, flex: 1, overflow: 'hidden' }}>
