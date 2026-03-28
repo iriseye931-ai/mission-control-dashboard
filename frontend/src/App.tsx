@@ -33,7 +33,8 @@ const AGENT_COLORS: Record<string, string> = {
 
 const SERVICE_SHORT: Record<string, string> = {
   openviking: 'Viking', memory_mcp: 'MemMCP', openclaw_mcp: 'Claw',
-  aimaestro: 'Maestro', mlx_server: 'MLX', llm_server: 'Ollama',
+  aimaestro: 'Maestro', mlx_server: 'MLX', ollama: 'Ollama',
+  whisper_stt: 'Whisper',
 }
 
 // ── KPI Strip ─────────────────────────────────────────────────────────────────
