@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, AsyncGenerator
 
 import httpx
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -1209,6 +1209,30 @@ async def api_brief(refresh: bool = False):
         "brief": text,
         "generated_at": _brief_cache["generated_at"].isoformat() if _brief_cache["generated_at"] else None,
     }
+
+
+@app.post("/api/stt")
+async def api_stt(file: UploadFile = File(...)):
+    """
+    Proxy audio to the local Whisper STT server at :8082.
+    Accepts any audio format the browser sends (webm, wav, etc).
+    Returns OpenAI-compatible {"text": "..."}.
+    """
+    audio_bytes = await file.read()
+    filename = file.filename or "audio.webm"
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{WHISPER_STT_URL}/v1/audio/transcriptions",
+                files={"file": (filename, audio_bytes, file.content_type or "audio/webm")},
+                data={"model": "whisper-1"},
+            )
+            if resp.status_code != 200:
+                return {"error": f"Whisper STT error {resp.status_code}", "text": ""}
+            return resp.json()
+    except Exception as exc:
+        return {"error": f"STT unavailable: {exc}", "text": ""}
 
 
 # ---------------------------------------------------------------------------
