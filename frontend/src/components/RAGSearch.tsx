@@ -26,11 +26,13 @@ export default function RAGSearch() {
   const [dragging, setDragging] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [uploadMsg, setUploadMsg] = useState<string | null>(null)
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const dragCountRef = useRef(0)
 
   useEffect(() => {
     fetchStatus()
+    return () => { abortRef.current?.abort() }
   }, [])
 
   async function fetchStatus() {
@@ -44,6 +46,31 @@ export default function RAGSearch() {
     } catch { /* ignore */ }
   }
 
+  const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+
+  function uploadFileXHR(file: File): Promise<{ ok: boolean; detail?: string }> {
+    return new Promise((resolve) => {
+      const xhr = new XMLHttpRequest()
+      const form = new FormData()
+      form.append('file', file, file.name)
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable) setUploadProgress(Math.round((e.loaded / e.total) * 100))
+      })
+      xhr.addEventListener('load', () => {
+        setUploadProgress(null)
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve({ ok: true })
+        } else {
+          try { resolve({ ok: false, detail: JSON.parse(xhr.responseText).detail }) }
+          catch { resolve({ ok: false, detail: `HTTP ${xhr.status}` }) }
+        }
+      })
+      xhr.addEventListener('error', () => { setUploadProgress(null); resolve({ ok: false }) })
+      xhr.open('POST', '/api/rag/upload')
+      xhr.send(form)
+    })
+  }
+
   async function uploadFiles(files: FileList | File[]) {
     const arr = Array.from(files)
     if (arr.length === 0) return
@@ -52,14 +79,20 @@ export default function RAGSearch() {
     let ok = 0
     let fail = 0
     for (const file of arr) {
-      try {
-        const form = new FormData()
-        form.append('file', file, file.name)
-        const res = await fetch('/api/rag/upload', { method: 'POST', body: form })
-        if (res.ok) ok++
-        else fail++
-      } catch { fail++ }
+      if (file.size > MAX_UPLOAD_BYTES) {
+        setUploadMsg(`${file.name} is too large (max 50MB)`)
+        fail++
+        continue
+      }
+      const result = await uploadFileXHR(file)
+      if (result.ok) {
+        ok++
+      } else {
+        setUploadMsg(result.detail || 'Upload failed')
+        fail++
+      }
     }
+    setUploadProgress(null)
     setUploadMsg(
       fail === 0
         ? `Uploaded ${ok} file${ok !== 1 ? 's' : ''} — click reindex to search`
@@ -119,7 +152,6 @@ export default function RAGSearch() {
       }
     } finally {
       setLoading(false)
-      abortRef.current = null
     }
   }
 
@@ -207,7 +239,12 @@ export default function RAGSearch() {
             background: '#0d0d14',
           }}
         >
-          {uploading ? 'Uploading…' : uploadMsg}
+          {uploading ? (uploadProgress !== null ? `Uploading… ${uploadProgress}%` : 'Uploading…') : uploadMsg}
+          {uploading && uploadProgress !== null && (
+            <div style={{ marginTop: 4, height: 2, background: '#1e1e2e', borderRadius: 1 }}>
+              <div style={{ height: '100%', width: `${uploadProgress}%`, background: '#8b5cf6', borderRadius: 1, transition: 'width 0.1s' }} />
+            </div>
+          )}
         </div>
       )}
 

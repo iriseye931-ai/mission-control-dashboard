@@ -83,10 +83,12 @@ function ComposeModal({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(form),
       })
+      if (!res.ok) throw new Error(`Server error: ${res.status}`)
       const data = await res.json()
       if (!data.ok) {
         setError(data.error || 'Send failed')
       } else {
+        setForm(COMPOSE_DEFAULTS)
         onSent()
         onClose()
       }

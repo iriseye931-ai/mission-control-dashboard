@@ -19,10 +19,11 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
 
 import httpx
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 # ---------------------------------------------------------------------------
 # Config / constants
@@ -74,10 +75,20 @@ Current mesh status:
 # App
 # ---------------------------------------------------------------------------
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    asyncio.create_task(_poll_loop())
+    asyncio.create_task(_openviking_watchdog())
+    asyncio.create_task(_generate_brief_on_startup())
+    print(f"[startup] Mission Control backend on :8000 — polling every {POLL_INTERVAL}s, watchdog active")
+    yield
+
+
 app = FastAPI(
     title="Mission Control Dashboard API",
     description="Real-time backend for local AI mesh monitoring",
     version="2.0.0",
+    lifespan=_lifespan,
 )
 
 app.add_middleware(
@@ -288,13 +299,14 @@ MESH_AGENTS = [
 ]
 
 
-def _is_process_running(pattern: str) -> bool:
+async def _is_process_running(pattern: str) -> bool:
     try:
-        result = subprocess.run(
-            ["pgrep", "-f", pattern],
-            capture_output=True, text=True,
+        proc = await asyncio.create_subprocess_exec(
+            "pgrep", "-f", pattern,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
         )
-        return result.returncode == 0
+        return await proc.wait() == 0
     except Exception:
         return False
 
@@ -308,9 +320,7 @@ async def _fetch_agents() -> list[dict[str, Any]]:
         if key == "atlas":
             status = "online"
             task = "Lead agent — Mission Control"
-        elif defn["detect"] and await asyncio.get_event_loop().run_in_executor(
-            None, _is_process_running, defn["detect"]
-        ):
+        elif defn["detect"] and await _is_process_running(defn["detect"]):
             status = "online"
             task = None
         else:
@@ -727,7 +737,9 @@ async def _poll_loop():
 
                 await _broadcast_status()
             except Exception as exc:
-                print(f"[poll] error: {exc}")
+                import traceback
+                print(f"[poll] error: {exc}", flush=True)
+                traceback.print_exc()
 
             await asyncio.sleep(POLL_INTERVAL)
 
@@ -976,7 +988,10 @@ async def _generate_brief(force: bool = False) -> str:
         {"role": "user", "content": f"Current mesh snapshot:\n\n{context}\n\nGenerate the brief."},
     ]
 
-    text = await _mlx_chat_complete(messages, max_tokens=400)
+    try:
+        text = await asyncio.wait_for(_mlx_chat_complete(messages, max_tokens=400), timeout=15.0)
+    except asyncio.TimeoutError:
+        return "Brief generation timed out — MLX may be busy. Try again in a moment."
     _brief_cache = {"text": text, "generated_at": now}
     return text
 
@@ -995,12 +1010,6 @@ async def _generate_brief_on_startup():
 # Startup / shutdown
 # ---------------------------------------------------------------------------
 
-@app.on_event("startup")
-async def _startup():
-    asyncio.create_task(_poll_loop())
-    asyncio.create_task(_openviking_watchdog())
-    asyncio.create_task(_generate_brief_on_startup())
-    print(f"[startup] Mission Control backend on :8000 — polling every {POLL_INTERVAL}s, watchdog active")
 
 
 # ---------------------------------------------------------------------------
@@ -1101,17 +1110,59 @@ async def api_amp_messages():
     return {"messages": messages}
 
 
+_AMP_ALLOWED_TYPES = {"notification", "request", "task", "response"}
+
+
 class AmpSendRequest(BaseModel):
     recipient: str
     subject: str
     message: str
     type: str = "notification"
 
+    @field_validator("recipient")
+    @classmethod
+    def _chk_recipient(cls, v: str) -> str:
+        import re
+        v = v.strip()
+        if not v:
+            raise ValueError("recipient required")
+        if len(v) > 100:
+            raise ValueError("recipient too long (max 100)")
+        if not re.match(r"^[a-zA-Z0-9@._\-]+$", v):
+            raise ValueError("recipient contains invalid characters")
+        return v
+
+    @field_validator("subject")
+    @classmethod
+    def _chk_subject(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("subject required")
+        if len(v) > 200:
+            raise ValueError("subject too long (max 200)")
+        return v
+
+    @field_validator("message")
+    @classmethod
+    def _chk_message(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("message required")
+        if len(v) > 4000:
+            raise ValueError("message too long (max 4000)")
+        return v
+
+    @field_validator("type")
+    @classmethod
+    def _chk_type(cls, v: str) -> str:
+        if v not in _AMP_ALLOWED_TYPES:
+            raise ValueError(f"type must be one of: {', '.join(sorted(_AMP_ALLOWED_TYPES))}")
+        return v
+
 
 @app.post("/api/amp/send")
 async def api_amp_send(req: AmpSendRequest):
     """Send an AMP message via amp-send CLI."""
-    amp_bin = "/Users/iris/.local/bin/amp-send"
+    amp_bin = os.getenv("AMP_BIN", "/Users/iris/.local/bin/amp-send")
     env = {**os.environ, "PATH": f"/Users/iris/.local/bin:{os.environ.get('PATH', '')}"}
     try:
         result = await asyncio.get_event_loop().run_in_executor(
@@ -1502,13 +1553,21 @@ async def api_rag_status():
     }
 
 
+_RAG_MAX_FILE_BYTES = 50 * 1024 * 1024  # 50MB
+_RAG_ALLOWED_EXT = {'.pdf', '.txt', '.md', '.docx', '.csv', '.json', '.rst'}
+
+
 @app.post("/api/rag/upload")
 async def api_rag_upload(file: UploadFile = File(...)):
     """Upload a file directly into the RAG inbox."""
     RAG_INBOX.mkdir(parents=True, exist_ok=True)
     safe_name = Path(file.filename or "upload").name
-    dest = RAG_INBOX / safe_name
+    if Path(safe_name).suffix.lower() not in _RAG_ALLOWED_EXT:
+        raise HTTPException(status_code=400, detail=f"File type not allowed. Accepted: {', '.join(sorted(_RAG_ALLOWED_EXT))}")
     content = await file.read()
+    if len(content) > _RAG_MAX_FILE_BYTES:
+        raise HTTPException(status_code=413, detail="File too large (max 50MB)")
+    dest = RAG_INBOX / safe_name
     dest.write_bytes(content)
     return {"filename": safe_name, "size": len(content)}
 
@@ -1546,8 +1605,15 @@ async def api_tts(req: TTSRequest):
 # WebSocket
 # ---------------------------------------------------------------------------
 
+_MAX_WS_CONNECTIONS = 50
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
+    async with _ws_lock:
+        if len(_ws_clients) >= _MAX_WS_CONNECTIONS:
+            await ws.close(code=1008, reason="Server at capacity")
+            return
     await ws.accept()
     async with _ws_lock:
         _ws_clients.add(ws)

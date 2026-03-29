@@ -17,3 +17,8 @@ logs/
 
 # Local config
 *.local
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
