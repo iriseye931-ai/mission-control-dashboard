@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { Agent, ServiceHealth, CronJob, MemoryEntry, Message, SystemMetrics, AmpMessage, HermesStatus, MeshLogs, TrendingRepo, MeshInsight } from '../types'
+import { Agent, ServiceHealth, ServiceHistoryPoint, CronJob, MemoryEntry, Message, SystemMetrics, AmpMessage, HermesStatus, MeshLogs, TrendingRepo, MeshInsight } from '../types'
 
 interface DashboardState {
   // Connection
@@ -20,6 +20,9 @@ interface DashboardState {
   // LLM / Voice
   llmActive: string | null
   voiceActive: boolean
+
+  // Service sparkline history
+  serviceHistory: Record<string, ServiceHistoryPoint[]>
 
   // Trending
   trendingRepos: TrendingRepo[]
@@ -54,6 +57,7 @@ interface DashboardState {
   setLogs: (logs: MeshLogs) => void
   setAmpMessages: (messages: AmpMessage[]) => void
   setHermesStatus: (status: HermesStatus) => void
+  setServiceHistory: (history: Record<string, ServiceHistoryPoint[]>) => void
   setTrendingRepos: (repos: TrendingRepo[]) => void
   addInsight: (insight: MeshInsight) => void
   setInsights: (insights: MeshInsight[]) => void
@@ -76,6 +80,7 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   llmActive: null,
   voiceActive: false,
 
+  serviceHistory: {},
   trendingRepos: [],
   insights: [],
 
@@ -115,6 +120,7 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   setLogs: (logs) => set({ logs }),
   setAmpMessages: (ampMessages) => set({ ampMessages }),
   setHermesStatus: (hermesStatus) => set({ hermesStatus }),
+  setServiceHistory: (serviceHistory) => set({ serviceHistory }),
   setTrendingRepos: (trendingRepos) => set({ trendingRepos }),
   addInsight: (insight) => set((state) => ({ insights: [insight, ...state.insights].slice(0, 20) })),
   setInsights: (insights) => set({ insights }),

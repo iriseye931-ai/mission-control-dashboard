@@ -108,11 +108,23 @@ export interface TrendingRepo {
   topics: string[]
 }
 
+export interface ServiceHistoryPoint {
+  ts: string
+  up: boolean
+}
+
+export interface SessionEntry {
+  ts: string
+  role: string
+  content: string
+}
+
 export interface StatusUpdate {
   type: 'status_update'
   timestamp?: string
   agents?: Agent[]
   services?: Record<string, ServiceHealth>
+  service_history?: Record<string, ServiceHistoryPoint[]>
   cron_jobs?: CronJob[]
   memories?: MemoryEntry[]
   llm_active?: string | null

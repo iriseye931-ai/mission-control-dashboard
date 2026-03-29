@@ -10,6 +10,8 @@ import ComputeGauges from './components/ComputeGauges'
 import MemoryMonitorLog from './components/MemoryMonitorLog'
 import MeshInsights from './components/MeshInsights'
 import MorningBrief from './components/MorningBrief'
+import NightlyRecap from './components/NightlyRecap'
+import SessionLog from './components/SessionLog'
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 const C = {
@@ -35,6 +37,19 @@ const SERVICE_SHORT: Record<string, string> = {
   openviking: 'Viking', memory_mcp: 'MemMCP', openclaw_mcp: 'Claw',
   aimaestro: 'Maestro', mlx_server: 'MLX', ollama: 'Ollama',
   whisper_stt: 'Whisper',
+}
+
+// ── Sparkline ─────────────────────────────────────────────────────────────────
+function Sparkline({ points }: { points: { up: boolean }[] }) {
+  if (!points || points.length < 2) return null
+  const w = 30, h = 10
+  const step = w / (points.length - 1)
+  const pts = points.map((p, i) => `${i * step},${p.up ? 1 : h - 1}`).join(' ')
+  return (
+    <svg width={w} height={h} style={{ display: 'block', flexShrink: 0 }}>
+      <polyline points={pts} fill="none" stroke={points[points.length - 1].up ? '#10b981' : '#ef4444'} strokeWidth="1.5" strokeLinejoin="round" />
+    </svg>
+  )
 }
 
 // ── KPI Strip ─────────────────────────────────────────────────────────────────
@@ -91,6 +106,7 @@ function KpiStrip() {
   const agents  = useDashboardStore((s) => s.agents)
   const system  = useDashboardStore((s) => s.system)
   const services = useDashboardStore((s) => s.services)
+  const serviceHistory = useDashboardStore((s) => s.serviceHistory)
   const ampMessages = useDashboardStore((s) => s.ampMessages)
 
   const onlineCount = agents.filter(a =>
@@ -131,10 +147,11 @@ function KpiStrip() {
           <span style={{ width: 1, height: 16, background: C.border, flexShrink: 0 }} />
         )}
 
-        {/* Service pills */}
+        {/* Service pills with sparklines */}
         {Object.entries(services as Record<string, { status: string }>).map(([key, svc]) => {
           const up = svc.status === 'up' || svc.status === 'healthy'
           const dot = up ? C.green : C.red
+          const hist = (serviceHistory as Record<string, { up: boolean }[]>)[key]
           return (
             <span key={key} style={{
               display: 'flex', alignItems: 'center', gap: 4,
@@ -147,6 +164,7 @@ function KpiStrip() {
                 boxShadow: up ? `0 0 4px ${dot}` : 'none',
               }} />
               {SERVICE_SHORT[key] ?? key}
+              {hist && hist.length >= 2 && <Sparkline points={hist} />}
             </span>
           )
         })}
@@ -156,7 +174,7 @@ function KpiStrip() {
 }
 
 // ── Right Panel ───────────────────────────────────────────────────────────────
-type RightTab = 'system' | 'memory' | 'schedule' | 'insights' | 'recalls'
+type RightTab = 'system' | 'memory' | 'schedule' | 'insights' | 'recalls' | 'log'
 
 const RIGHT_TABS: { id: RightTab; label: string }[] = [
   { id: 'system',   label: 'MLX'      },
@@ -164,6 +182,7 @@ const RIGHT_TABS: { id: RightTab; label: string }[] = [
   { id: 'schedule', label: 'Schedule' },
   { id: 'insights', label: 'Insights' },
   { id: 'recalls',  label: 'Recalls'  },
+  { id: 'log',      label: 'Log'      },
 ]
 
 function RightPanel() {
@@ -200,10 +219,12 @@ function RightPanel() {
             <p style={{ fontSize: 9, color: C.textSec, fontFamily: 'monospace', letterSpacing: '0.12em', textTransform: 'uppercase', flexShrink: 0 }}>Scheduled</p>
             <CronProgress />
             <MorningBrief />
+            <NightlyRecap />
           </div>
         )}
         {tab === 'insights' && <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}><MeshInsights /></div>}
         {tab === 'recalls' && <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}><ActivityFeed /></div>}
+        {tab === 'log' && <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}><SessionLog /></div>}
       </div>
     </aside>
   )

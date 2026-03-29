@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import re
 import psutil
@@ -64,6 +65,10 @@ TRENDING_CACHE_TTL = 6 * 3600  # 6 hours
 MCP_PING = {"jsonrpc": "2.0", "id": 0, "method": "ping"}
 MCP_HEADERS = {"Content-Type": "application/json", "Accept": "application/json"}
 
+NIGHTLY_BUILD_LOG = Path.home() / ".claude" / "nightly-build-log.md"
+SESSIONS_DB = Path.home() / ".claude" / "atlas-sessions.db"
+_SERVICE_HISTORY_MAX = 20
+
 MESH_OPERATOR = os.getenv("MESH_OPERATOR", "Punch")
 
 ATLAS_SYSTEM_PROMPT = """You are Atlas — the lead AI agent in a local AI mesh. You are accessed via the Mission Control Dashboard. Be direct, concise, technical.
@@ -75,8 +80,23 @@ Current mesh status:
 # App
 # ---------------------------------------------------------------------------
 
+def _init_sessions_db():
+    with sqlite3.connect(SESSIONS_DB) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS session_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                ts TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_date ON session_log(date)")
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
+    _init_sessions_db()
     asyncio.create_task(_poll_loop())
     asyncio.create_task(_openviking_watchdog())
     asyncio.create_task(_generate_brief_on_startup())
@@ -121,6 +141,7 @@ _state: dict[str, Any] = {
     "last_updated": None,
     "system": {},
     "trending_repos": [],
+    "service_history": {},
 }
 
 _trending_cache_time: float = 0.0
@@ -135,6 +156,17 @@ _ws_lock = asyncio.Lock()
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _update_service_history(services: dict):
+    hist = _state["service_history"]
+    ts = _now_iso()
+    for name, svc in services.items():
+        up = svc.get("status") in ("up", "healthy")
+        entry = {"ts": ts, "up": up}
+        if name not in hist:
+            hist[name] = []
+        hist[name] = (hist[name] + [entry])[-_SERVICE_HISTORY_MAX:]
 
 
 def _seconds_until(iso_str: str | None) -> int | None:
@@ -723,6 +755,7 @@ async def _poll_loop():
                     asyncio.get_event_loop().run_in_executor(None, _fetch_memory_monitor_log),
                 )
                 _state["services"] = services
+                _update_service_history(services)
                 _state["agents"] = agents
                 _state["cron_jobs"] = cron_jobs
                 _state["memories"] = memories
@@ -772,6 +805,7 @@ async def _broadcast_status():
         "amp_messages": _state["amp_messages"],
         "hermes_status": _state["hermes_status"],
         "trending_repos": _state["trending_repos"],
+        "service_history": _state["service_history"],
     }
     data = json.dumps(payload)
     async with _ws_lock:
@@ -1254,6 +1288,85 @@ async def api_insights_post(payload: InsightPayload):
 @app.get("/api/insights")
 async def api_insights_get():
     return {"insights": _insights}
+
+
+@app.get("/api/nightly/status")
+async def api_nightly_status():
+    if not NIGHTLY_BUILD_LOG.exists():
+        return {"last_run": None, "rotation": None, "branch": None, "pr_url": None, "log_tail": None}
+    text = NIGHTLY_BUILD_LOG.read_text(errors="replace")
+    sections = re.split(r"^## ", text, flags=re.MULTILINE)
+    last = sections[-1].strip() if len(sections) > 1 else None
+    last_run = rotation = branch = pr_url = log_tail = None
+    if last:
+        log_tail = last[:600]
+        m = re.match(r"(\d{4}-\d{2}-\d{2})\s*[-–]\s*(\w+)", last)
+        if m:
+            last_run, rotation = m.group(1), m.group(2)
+        pr_m = re.search(r"- PR:\s*(https://\S+)", last)
+        if pr_m:
+            pr_url = pr_m.group(1)
+    try:
+        result = subprocess.run(
+            ["git", "branch", "--list", "nightly/*"],
+            cwd=str(Path.home() / "Projects" / "mission-control-dashboard"),
+            capture_output=True, text=True, timeout=5,
+        )
+        branches = [b.strip().lstrip("* ") for b in result.stdout.strip().splitlines() if b.strip()]
+        branch = branches[-1] if branches else None
+    except Exception:
+        pass
+    return {"last_run": last_run, "rotation": rotation, "branch": branch, "pr_url": pr_url, "log_tail": log_tail}
+
+
+class SessionLogRequest(BaseModel):
+    role: str
+    content: str
+
+    @field_validator("role")
+    @classmethod
+    def _chk_role(cls, v: str) -> str:
+        if v not in ("user", "assistant", "system", "note"):
+            raise ValueError("role must be user/assistant/system/note")
+        return v
+
+    @field_validator("content")
+    @classmethod
+    def _chk_content(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("content required")
+        if len(v) > 10000:
+            raise ValueError("content too long (max 10000)")
+        return v
+
+
+@app.get("/api/sessions/today")
+async def api_sessions_today():
+    today = datetime.now().strftime("%Y-%m-%d")
+    try:
+        with sqlite3.connect(SESSIONS_DB) as conn:
+            rows = conn.execute(
+                "SELECT ts, role, content FROM session_log WHERE date = ? ORDER BY id ASC",
+                (today,),
+            ).fetchall()
+        return {"date": today, "entries": [{"ts": r[0], "role": r[1], "content": r[2]} for r in rows]}
+    except Exception as e:
+        return {"date": today, "entries": [], "error": str(e)}
+
+
+@app.post("/api/sessions/log")
+async def api_sessions_log(req: SessionLogRequest):
+    today = datetime.now().strftime("%Y-%m-%d")
+    ts = _now_iso()
+    try:
+        with sqlite3.connect(SESSIONS_DB) as conn:
+            conn.execute(
+                "INSERT INTO session_log (date, ts, role, content) VALUES (?, ?, ?, ?)",
+                (today, ts, req.role, req.content),
+            )
+        return {"ok": True, "ts": ts}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/status")
