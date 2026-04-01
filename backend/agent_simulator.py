@@ -5,7 +5,7 @@ import asyncio
 import random
 from datetime import datetime, timedelta
 import sys
-sys.path.append('/Users/iris/.openclaw/workspace/mission-control-dashboard/backend')
+sys.path.append('/Users/iris/Projects/mission-control-dashboard/backend')
 
 from models import AgentEvent, EventType, AgentStatus, LogEntry
 from event_bus import event_bus

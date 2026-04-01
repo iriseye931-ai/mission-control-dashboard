@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { Agent, ServiceHealth, ServiceHistoryPoint, CronJob, MemoryEntry, Message, SystemMetrics, AmpMessage, HermesStatus, MeshLogs, TrendingRepo, MeshInsight } from '../types'
+import { Agent, ServiceHealth, ServiceHistoryPoint, CronJob, MemoryEntry, Message, SystemMetrics, AmpMessage, HermesStatus, MeshLogs, TrendingRepo, MeshInsight, RoutingSummary, PermissionAuditSummary } from '../types'
 
 interface DashboardState {
   // Connection
@@ -16,6 +16,8 @@ interface DashboardState {
   logs: MeshLogs
   ampMessages: AmpMessage[]
   hermesStatus: HermesStatus | null
+  routingSummary: RoutingSummary | null
+  permissionAuditSummary: PermissionAuditSummary | null
 
   // LLM / Voice
   llmActive: string | null
@@ -57,6 +59,8 @@ interface DashboardState {
   setLogs: (logs: MeshLogs) => void
   setAmpMessages: (messages: AmpMessage[]) => void
   setHermesStatus: (status: HermesStatus) => void
+  setRoutingSummary: (summary: RoutingSummary) => void
+  setPermissionAuditSummary: (summary: PermissionAuditSummary | null) => void
   setServiceHistory: (history: Record<string, ServiceHistoryPoint[]>) => void
   setTrendingRepos: (repos: TrendingRepo[]) => void
   addInsight: (insight: MeshInsight) => void
@@ -76,6 +80,8 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   logs: { mlx: [], memory: [] },
   ampMessages: [],
   hermesStatus: null,
+  routingSummary: null,
+  permissionAuditSummary: null,
 
   llmActive: null,
   voiceActive: false,
@@ -120,6 +126,8 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   setLogs: (logs) => set({ logs }),
   setAmpMessages: (ampMessages) => set({ ampMessages }),
   setHermesStatus: (hermesStatus) => set({ hermesStatus }),
+  setRoutingSummary: (routingSummary) => set({ routingSummary }),
+  setPermissionAuditSummary: (permissionAuditSummary) => set({ permissionAuditSummary }),
   setServiceHistory: (serviceHistory) => set({ serviceHistory }),
   setTrendingRepos: (trendingRepos) => set({ trendingRepos }),
   addInsight: (insight) => set((state) => ({ insights: [insight, ...state.insights].slice(0, 20) })),

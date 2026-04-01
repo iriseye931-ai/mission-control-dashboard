@@ -63,6 +63,13 @@ pip install -r requirements.txt
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
+**Mesh Doctor:**
+```bash
+cd backend
+./venv/bin/python mesh_doctor.py
+```
+Runs a local-first operational check over Mission Control, Hermes, AI Maestro, cron freshness, routing policy, and stale agents.
+
 **Frontend:**
 ```bash
 cd frontend
@@ -145,6 +152,56 @@ This dashboard was built alongside the [iriseye](https://github.com/iriseye931-a
 The backend auto-detects running processes and polls local service endpoints — no instrumentation required to get a working dashboard.
 
 Want the full mesh setup? → [iriseye repo](https://github.com/iriseye931-ai/iriseye)
+
+---
+
+## Routing policy
+
+Mission Control now treats the mesh as `local-first, premium-by-exception`.
+
+- `Hermes` is the default workhorse for routine execution.
+- `iriseye` handles interactive file and web tasks.
+- `Atlas` is the lead premium role, served by Codex or Claude Code.
+- `claude` is the premium backup when available.
+
+Current enforced routing:
+
+```text
+routine      -> hermes
+specialized  -> iriseye
+premium      -> atlas (fallback: claude)
+```
+
+Premium capacity should be reserved for planning, ambiguous debugging, tricky refactors, and final review.
+
+---
+
+## Hermes local profiles
+
+Hermes is modeled as one local runner with multiple profiles, not as a pile of always-hot models.
+
+- `workhorse`
+  `Qwen3.5-35B-A3B-4bit`
+  Default local execution profile.
+
+- `sidecar`
+  `Qwen2.5-7B-Instruct-4bit`
+  Cheap auxiliary profile for summaries, routing, compression, and lightweight helper work.
+
+- `code-specialist`
+  `Qwen2.5-Coder-32B-Instruct-4bit`
+  Planned on-demand profile for code-heavy implementation and local review.
+
+- `reasoning-specialist`
+  `DeepSeek-R1-Distill-Qwen-32B-4bit`
+  Planned on-demand profile for harder local reasoning and second-pass debugging/review.
+
+The design goal is simple:
+
+- keep the always-on memory footprint small enough for a 48 GB Apple Silicon machine
+- let Hermes handle most task volume locally
+- only load heavier specialist profiles when a task actually justifies it
+- avoid burning premium capacity on routine work
 
 ---
 

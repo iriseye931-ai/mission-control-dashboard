@@ -33,7 +33,7 @@ export const useWebSocket = () => {
       if (unmountedRef.current) return
       try {
         const msg = JSON.parse(event.data)
-        const { setAgents, setServices, setServiceHistory, setCronJobs, setMemories, setLastUpdate, setLlmActive, setVoiceActive, setSystem, setMemoryMonitorLog, setLogs, setAmpMessages, setHermesStatus, setTrendingRepos, addInsight, setInsights } =
+        const { setAgents, setServices, setServiceHistory, setCronJobs, setMemories, setLastUpdate, setLlmActive, setVoiceActive, setSystem, setMemoryMonitorLog, setLogs, setAmpMessages, setHermesStatus, setRoutingSummary, setPermissionAuditSummary, setTrendingRepos, addInsight, setInsights } =
           useDashboardStore.getState()
         setLastUpdate(new Date())
 
@@ -56,6 +56,8 @@ export const useWebSocket = () => {
           if (su.logs) setLogs(su.logs)
           if (su.amp_messages) setAmpMessages(su.amp_messages)
           if (su.hermes_status) setHermesStatus(su.hermes_status)
+          if (su.routing_summary) setRoutingSummary(su.routing_summary)
+          if (su.permission_audit_summary) setPermissionAuditSummary(su.permission_audit_summary)
           if (su.trending_repos) setTrendingRepos(su.trending_repos)
           if (su.insights) setInsights(su.insights)
         }

@@ -11,10 +11,13 @@ import shutil
 import sqlite3
 import subprocess
 import re
+import signal
+import socket
 import psutil
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, AsyncGenerator
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
@@ -38,7 +41,7 @@ OPENVIKING_USER = os.getenv("OPENVIKING_USER", "iris")
 RAG_INBOX = Path.home() / "Documents" / "rag" / "inbox"
 
 MEMORY_MCP_URL = os.getenv("MEMORY_MCP_URL", "http://127.0.0.1:2033/mcp")
-OPENCLAW_MCP_URL = os.getenv("OPENCLAW_MCP_URL", "http://127.0.0.1:2034/mcp")
+HERMES_GATEWAY_URL = os.getenv("HERMES_GATEWAY_URL", "http://127.0.0.1:18789")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODELS_URL = f"{OLLAMA_URL}/v1/models"
 
@@ -46,6 +49,15 @@ MEMORY_MONITOR_LOG = Path.home() / ".mlx" / "logs" / "memory-monitor.log"
 MLX_ERROR_LOG = Path.home() / ".mlx" / "logs" / "mlx-server.error.log"
 AMP_AGENTS_DIR = Path.home() / ".agent-messaging" / "agents"
 HERMES_SESSIONS_DIR = Path.home() / ".hermes" / "sessions"
+HERMES_GATEWAY_STATE_PATH = Path.home() / ".hermes" / "gateway_state.json"
+HERMES_GATEWAY_PID_PATH = Path.home() / ".hermes" / "gateway.pid"
+AIMAESTRO_AGENTS_DIR = Path.home() / ".aimaestro" / "agents"
+AIMAESTRO_REGISTRY_PATH = AIMAESTRO_AGENTS_DIR / "registry.json"
+AVAILABILITY_OVERRIDES_PATH = Path.home() / ".mesh" / "availability_overrides.json"
+PERMISSION_AUDIT_LOG_PATH = Path.home() / ".mesh" / "permission_audit.jsonl"
+MESH_PROFILE_RUNTIME_DIR = Path.home() / ".mesh" / "mlx-profiles"
+MLX_VENV_BIN = Path.home() / ".mlx" / "venv" / "bin"
+MLX_SERVER_BIN = MLX_VENV_BIN / "mlx_lm.server"
 
 MLX_SERVER_URL = os.getenv("MLX_SERVER_URL", "http://127.0.0.1:8081")
 WHISPER_STT_URL = os.getenv("WHISPER_STT_URL", "http://127.0.0.1:8082")
@@ -142,12 +154,32 @@ _state: dict[str, Any] = {
     "system": {},
     "trending_repos": [],
     "service_history": {},
+    "routing_summary": {},
+    "permission_audit_summary": {},
 }
 
 _trending_cache_time: float = 0.0
 
 _ws_clients: set[WebSocket] = set()
 _ws_lock = asyncio.Lock()
+
+_ROUTINE_KEYWORDS = {
+    "summarize", "summary", "digest", "status", "report", "memory", "cron",
+    "schedule", "scan", "search", "recall", "monitor", "health", "log",
+}
+_SPECIALIZED_KEYWORDS = {
+    "browser", "web", "website", "page", "scrape", "click", "navigate",
+    "file", "folder", "upload", "download",
+}
+_PREMIUM_KEYWORDS = {
+    "plan", "planning", "architecture", "architect", "design", "ambiguous",
+    "debug", "debugging", "investigate", "root cause", "refactor", "review",
+    "final review", "hard", "complex", "high-stakes", "risky",
+}
+_CODE_KEYWORDS = {
+    "code", "implement", "implementation", "patch", "fix", "bug", "test",
+    "tests", "typescript", "python", "react", "fastapi", "refactor",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +211,347 @@ def _seconds_until(iso_str: str | None) -> int | None:
         return max(0, int(delta.total_seconds()))
     except Exception:
         return None
+
+
+def _parse_iso_datetime(iso_str: str | None) -> datetime | None:
+    if not iso_str:
+        return None
+    try:
+        return datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _activity_summary(iso_str: str | None) -> tuple[str, int | None]:
+    """Return an activity freshness label and age in seconds."""
+    dt = _parse_iso_datetime(iso_str)
+    if not dt:
+        return "unknown", None
+
+    age_seconds = max(0, int((datetime.now(timezone.utc) - dt).total_seconds()))
+    if age_seconds <= 15 * 60:
+        return "live", age_seconds
+    if age_seconds <= 6 * 3600:
+        return "recent", age_seconds
+    if age_seconds <= 24 * 3600:
+        return "idle", age_seconds
+    return "stale", age_seconds
+
+
+def _classify_task(text: str) -> tuple[str, str]:
+    lowered = (text or "").strip().lower()
+    if not lowered:
+        return "routine", "Default local execution"
+
+    if any(token in lowered for token in _PREMIUM_KEYWORDS):
+        return "premium", "Premium-only work matched planning/debugging/review signals"
+    if any(token in lowered for token in _SPECIALIZED_KEYWORDS):
+        return "specialized", "Specialized file/web work detected"
+    if any(token in lowered for token in _CODE_KEYWORDS):
+        return "routine", "Code-heavy local work detected"
+    if any(token in lowered for token in _ROUTINE_KEYWORDS):
+        return "routine", "Routine local work detected"
+    if len(lowered) > 600 or lowered.count("\n") > 8:
+        return "premium", "Large or complex request defaults to premium review"
+    return "routine", "Default local execution"
+
+
+def _build_routing_summary(agents: list[dict[str, Any]]) -> dict[str, Any]:
+    premium_pool = [a for a in agents if a.get("routing_group") == "premium-pool"]
+    available_premium = [
+        a for a in premium_pool
+        if a.get("availability_status", "available") == "available"
+    ]
+    local_default = next((a for a in agents if a.get("routing_group") == "local-default"), None)
+    specialized = [a for a in agents if a.get("routing_group") == "specialized"]
+    return {
+        "policy": "local-first",
+        "premium_pool": [a.get("name") for a in premium_pool],
+        "premium_available": [a.get("name") for a in available_premium],
+        "premium_available_count": len(available_premium),
+        "premium_total_count": len(premium_pool),
+        "local_default": (local_default or {}).get("name"),
+        "specialized_agents": [a.get("name") for a in specialized],
+        "guidance": {
+            "routine": (local_default or {}).get("name") or "hermes",
+            "specialized": specialized[0].get("name") if specialized else ((local_default or {}).get("name") or "hermes"),
+            "premium": available_premium[0].get("name") if available_premium else (premium_pool[0].get("name") if premium_pool else "atlas"),
+        },
+    }
+
+
+def _permission_audit_entries(limit: int | None = None) -> list[dict[str, Any]]:
+    path = PERMISSION_AUDIT_LOG_PATH
+    if not path.exists():
+        return []
+
+    entries: list[dict[str, Any]] = []
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(entry, dict):
+                    entries.append(entry)
+    except Exception:
+        return []
+
+    if limit is not None:
+        return entries[-limit:]
+    return entries
+
+
+def _summarize_permission_audit(entries: list[dict[str, Any]]) -> dict[str, Any]:
+    decision_counts = {"allow": 0, "deny": 0, "ask": 0, "bypass": 0}
+    mode_counts: dict[str, int] = {}
+    last_entry = entries[-1] if entries else None
+
+    for entry in entries:
+        decision = str(entry.get("decision", "")).lower()
+        if decision in decision_counts:
+            decision_counts[decision] += 1
+        mode = str(entry.get("mode", "")).lower()
+        if mode:
+            mode_counts[mode] = mode_counts.get(mode, 0) + 1
+
+    return {
+        "count": len(entries),
+        "decision_counts": decision_counts,
+        "mode_counts": mode_counts,
+        "last_event_at": (last_entry or {}).get("timestamp"),
+    }
+
+
+def _refresh_permission_audit_summary() -> dict[str, Any]:
+    summary = _summarize_permission_audit(_permission_audit_entries(limit=200))
+    _state["permission_audit_summary"] = summary
+    return summary
+
+
+def _append_permission_audit(entry: dict[str, Any]) -> dict[str, Any]:
+    path = PERMISSION_AUDIT_LOG_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "timestamp": entry.get("timestamp") or _now_iso(),
+        "source": entry.get("source") or "unknown",
+        "agent": entry.get("agent"),
+        "tool": entry.get("tool"),
+        "decision": entry.get("decision"),
+        "mode": entry.get("mode"),
+        "reason": entry.get("reason"),
+        "input_summary": entry.get("input_summary"),
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record) + "\n")
+    _refresh_permission_audit_summary()
+    return record
+
+
+def _audit_permission_decision(
+    *,
+    decision: str,
+    tool: str,
+    reason: str,
+    mode: str = "default",
+    source: str = "mission-control",
+    agent: str | None = None,
+    input_summary: str | None = None,
+) -> dict[str, Any]:
+    return _append_permission_audit({
+        "source": source,
+        "agent": agent,
+        "tool": tool,
+        "decision": decision,
+        "mode": mode,
+        "reason": reason,
+        "input_summary": input_summary,
+    })
+
+
+def _extract_port(base_url: str | None) -> int | None:
+    if not base_url:
+        return None
+    try:
+        parsed = urlparse(base_url)
+        return parsed.port
+    except Exception:
+        return None
+
+
+def _profile_pid_path(agent_name: str, profile_name: str) -> Path:
+    safe = re.sub(r"[^a-z0-9_-]+", "-", f"{agent_name}-{profile_name}".lower())
+    return MESH_PROFILE_RUNTIME_DIR / f"{safe}.pid"
+
+
+def _profile_log_path(agent_name: str, profile_name: str) -> Path:
+    safe = re.sub(r"[^a-z0-9_-]+", "-", f"{agent_name}-{profile_name}".lower())
+    return MESH_PROFILE_RUNTIME_DIR / f"{safe}.log"
+
+
+def _resolve_profile_model(profile: dict[str, Any]) -> Path:
+    model = str(profile.get("model") or "").strip()
+    return Path(model).expanduser()
+
+
+def _port_open(port: int | None) -> bool:
+    if not port:
+        return False
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+            return True
+    except Exception:
+        return False
+
+
+def _pid_running(pid: int | None) -> bool:
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _read_pid(path: Path) -> int | None:
+    try:
+        return int(path.read_text().strip())
+    except Exception:
+        return None
+
+
+def _enrich_local_profile(agent_name: str, profile: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(profile)
+    model_path = _resolve_profile_model(profile)
+    pid_path = _profile_pid_path(agent_name, str(profile.get("name", "")))
+    log_path = _profile_log_path(agent_name, str(profile.get("name", "")))
+    pid = _read_pid(pid_path)
+    port = _extract_port(profile.get("base_url"))
+    running = _port_open(port) or _pid_running(pid)
+    installed = model_path.exists()
+    startable = installed and MLX_SERVER_BIN.exists()
+    enriched["model_path"] = str(model_path)
+    enriched["installed"] = installed
+    enriched["running"] = running
+    enriched["startable"] = startable
+    enriched["pid"] = pid if _pid_running(pid) else None
+    enriched["port"] = port
+    enriched["managed"] = bool(profile.get("managed")) or profile.get("mode") == "on-demand"
+    enriched["log_path"] = str(log_path)
+    return enriched
+
+
+def _recommend_local_profile(task: str, agents: list[dict[str, Any]], recommended_agent: str) -> dict[str, Any] | None:
+    if recommended_agent != "hermes":
+        return None
+    hermes = next((agent for agent in agents if agent.get("name") == "hermes"), None)
+    profiles = (hermes or {}).get("local_profiles") or next(
+        (entry.get("local_profiles", []) for entry in MESH_AGENTS if entry.get("name") == "hermes"),
+        [],
+    )
+    lowered = (task or "").strip().lower()
+
+    def _find(name: str) -> dict[str, Any] | None:
+        return next((profile for profile in profiles if profile.get("name") == name), None)
+
+    if any(token in lowered for token in {"summary", "summarize", "digest", "route", "routing", "compress", "compression"}):
+        profile = _find("sidecar")
+        if profile:
+            return {"profile": profile.get("name"), "reason": "Lightweight summary/routing task fits Hermes sidecar"}
+
+    if any(token in lowered for token in _CODE_KEYWORDS):
+        profile = _find("code-specialist")
+        if profile:
+            if profile.get("installed"):
+                return {"profile": profile.get("name"), "reason": "Code-heavy work fits Hermes code specialist"}
+            return {"profile": "workhorse", "reason": "Code specialist is not installed locally; stay on Hermes workhorse"}
+
+    if any(token in lowered for token in {"reason", "reasoning", "investigate", "root cause", "second pass"}):
+        profile = _find("reasoning-specialist")
+        if profile:
+            if profile.get("installed"):
+                return {"profile": profile.get("name"), "reason": "Harder local reasoning fits Hermes reasoning specialist"}
+            return {"profile": "workhorse", "reason": "Reasoning specialist is not installed locally; stay on Hermes workhorse"}
+
+    profile = _find("workhorse")
+    if profile:
+        return {"profile": profile.get("name"), "reason": "Default Hermes workhorse profile"}
+    return None
+
+
+def _recommend_route(task: str, agents: list[dict[str, Any]]) -> dict[str, Any]:
+    task_class, reason = _classify_task(task)
+    summary = _build_routing_summary(agents)
+    if task_class == "premium":
+        primary = summary["guidance"]["premium"]
+        premium_pool = summary.get("premium_pool", [])
+        fallback = next((name for name in premium_pool if name != primary), summary["guidance"]["routine"])
+        return {
+            "task_class": task_class,
+            "recommended_agent": primary,
+            "model_tier": "premium",
+            "fallback_agent": fallback,
+            "recommended_profile": None,
+            "profile_reason": None,
+            "reason": reason,
+        }
+    if task_class == "specialized":
+        specialized = summary.get("specialized_agents", [])
+        primary = specialized[0] if specialized else summary["guidance"]["routine"]
+        fallback = summary["guidance"]["routine"]
+        return {
+            "task_class": task_class,
+            "recommended_agent": primary,
+            "model_tier": "specialized-local",
+            "fallback_agent": fallback,
+            "recommended_profile": None,
+            "profile_reason": None,
+            "reason": reason,
+        }
+    profile = _recommend_local_profile(task, agents, summary["guidance"]["routine"])
+    return {
+        "task_class": task_class,
+        "recommended_agent": summary["guidance"]["routine"],
+        "model_tier": "local-default",
+        "fallback_agent": None,
+        "recommended_profile": (profile or {}).get("profile"),
+        "profile_reason": (profile or {}).get("reason"),
+        "reason": reason,
+    }
+
+
+def _read_json(path: Path) -> dict[str, Any] | None:
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return None
+
+
+def _availability_overrides() -> dict[str, Any]:
+    data = _read_json(AVAILABILITY_OVERRIDES_PATH)
+    return data if isinstance(data, dict) else {}
+
+
+def _pid_is_alive(pid: int | None) -> bool:
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except Exception:
+        return False
+
+
+def _read_hermes_gateway_runtime() -> dict[str, Any] | None:
+    runtime = _read_json(HERMES_GATEWAY_STATE_PATH)
+    if runtime:
+        return runtime
+    return _read_json(HERMES_GATEWAY_PID_PATH)
 
 
 # ---------------------------------------------------------------------------
@@ -219,18 +592,43 @@ async def _fetch_service_health(client: httpx.AsyncClient) -> dict[str, Any]:
     except Exception as exc:
         services["memory_mcp"] = {"name": "Memory MCP", "status": "down", "error": str(exc)}
 
-    # OpenClaw MCP
+    # Hermes Gateway
     try:
-        r = await client.post(OPENCLAW_MCP_URL, json=MCP_PING, headers=MCP_HEADERS, timeout=HTTP_TIMEOUT)
+        r = await client.get(f"{HERMES_GATEWAY_URL}/health", timeout=HTTP_TIMEOUT)
         body = r.json()
-        services["openclaw_mcp"] = {
-            "name": "OpenClaw MCP",
-            "url": OPENCLAW_MCP_URL,
-            "status": "up" if "result" in body else "degraded",
+        services["hermes_gateway"] = {
+            "name": "Hermes Gateway",
+            "url": HERMES_GATEWAY_URL,
+            "status": "up" if body.get("ok") else "degraded",
             "detail": body,
         }
     except Exception as exc:
-        services["openclaw_mcp"] = {"name": "OpenClaw MCP", "status": "down", "error": str(exc)}
+        runtime = _read_hermes_gateway_runtime() or {}
+        pid = runtime.get("pid")
+        gateway_state = runtime.get("gateway_state")
+        platform_states = runtime.get("platforms", {})
+        active_platforms = sorted(
+            name for name, pdata in platform_states.items()
+            if isinstance(pdata, dict) and pdata.get("state") not in ("disconnected", "stopped")
+        )
+        if _pid_is_alive(pid) or gateway_state == "running":
+            services["hermes_gateway"] = {
+                "name": "Hermes Gateway",
+                "url": HERMES_GATEWAY_URL,
+                # Cron-only Hermes runs without an HTTP health endpoint.
+                "status": "degraded",
+                "error": str(exc),
+                "detail": {
+                    "runtime_state": gateway_state or "running",
+                    "pid": pid,
+                    "http_health": "unavailable",
+                    "active_platforms": active_platforms,
+                    "mode": "cron-only" if not active_platforms else "messaging",
+                    "updated_at": runtime.get("updated_at"),
+                },
+            }
+        else:
+            services["hermes_gateway"] = {"name": "Hermes Gateway", "status": "down", "error": str(exc)}
 
     # Ollama (embeddings)
     try:
@@ -287,11 +685,13 @@ async def _fetch_service_health(client: httpx.AsyncClient) -> dict[str, Any]:
     try:
         r = await client.get(f"{AI_MAESTRO_URL}/api/agents", timeout=HTTP_TIMEOUT)
         body = r.json()
+        agents = body.get("agents", [])
         services["aimaestro"] = {
             "name": "AI Maestro",
             "url": AI_MAESTRO_URL,
             "status": "up" if "agents" in body else "degraded",
-            "agents": len(body.get("agents", [])),
+            "agents": len(agents),
+            "online": sum(1 for agent in agents if agent.get("status") == "online"),
         }
     except Exception as exc:
         services["aimaestro"] = {"name": "AI Maestro", "status": "down", "error": str(exc)}
@@ -305,9 +705,15 @@ MESH_AGENTS = [
         "id": "atlas",
         "name": "atlas",
         "label": "Atlas",
-        "role": "Lead Agent",
-        "model": "claude-sonnet-4-6",
+        "role": "Lead Role",
+        "model": "Premium Lead Pool",
         "color": "#06b6d4",
+        "tier": "premium",
+        "routing_group": "premium-pool",
+        "scarce": True,
+        "default_for": [],
+        "reserve_for": ["planning", "ambiguous debugging", "tricky refactors", "final review"],
+        "fallback_to": "claude",
         "detect": None,  # always online — we are Atlas
     },
     {
@@ -317,16 +723,75 @@ MESH_AGENTS = [
         "role": "Task Runner",
         "model": "local LLM",
         "color": "#a855f7",
+        "tier": "local-default",
+        "routing_group": "local-default",
+        "scarce": False,
+        "default_for": ["cron jobs", "summaries", "memory consolidation", "repo scans", "routine execution"],
+        "reserve_for": [],
+        "fallback_to": None,
+        "local_profiles": [
+            {
+                "name": "workhorse",
+                "model": "/Users/iris/.mlx/models/Qwen3.5-35B-A3B-4bit",
+                "base_url": "http://192.168.1.186:8081/v1",
+                "purpose": "default execution",
+                "mode": "active",
+            },
+            {
+                "name": "sidecar",
+                "model": "/Users/iris/.mlx/models/Qwen2.5-7B-Instruct-4bit",
+                "base_url": "http://192.168.1.186:8083/v1",
+                "purpose": "summaries, routing, compression, auxiliary tasks",
+                "mode": "active",
+            },
+            {
+                "name": "code-specialist",
+                "model": "/Users/iris/.mlx/models/Qwen2.5-Coder-32B-Instruct-4bit",
+                "base_url": "http://127.0.0.1:8084/v1",
+                "purpose": "code-heavy implementation, patching, and local review",
+                "mode": "on-demand",
+                "managed": True,
+            },
+            {
+                "name": "reasoning-specialist",
+                "model": "/Users/iris/.mlx/models/DeepSeek-R1-Distill-Qwen-32B-4bit",
+                "base_url": "http://127.0.0.1:8085/v1",
+                "purpose": "harder local reasoning, debugging analysis, and second-pass review",
+                "mode": "on-demand",
+                "managed": True,
+            },
+        ],
         "detect": "hermes",  # pgrep pattern
     },
     {
         "id": "iriseye",
         "name": "iriseye",
         "label": "iriseye",
-        "role": "OpenClaw Agent",
-        "model": "local LLM",
+        "role": "File/Web Agent",
+        "model": "Claude Code",
         "color": "#10b981",
-        "detect": "openclaw-gateway",
+        "tier": "specialized",
+        "routing_group": "specialized",
+        "scarce": False,
+        "default_for": ["file work", "web tasks"],
+        "reserve_for": ["interactive file and browser tasks"],
+        "fallback_to": "hermes",
+        "detect": None,
+    },
+    {
+        "id": "claude",
+        "name": "claude",
+        "label": "claude",
+        "role": "Lead Role Backup",
+        "model": "Claude Code",
+        "color": "#f59e0b",
+        "tier": "premium",
+        "routing_group": "premium-pool",
+        "scarce": True,
+        "default_for": [],
+        "reserve_for": ["planning", "ambiguous debugging", "tricky refactors", "final review"],
+        "fallback_to": "atlas",
+        "detect": None,
     },
 ]
 
@@ -343,37 +808,166 @@ async def _is_process_running(pattern: str) -> bool:
         return False
 
 
-async def _fetch_agents() -> list[dict[str, Any]]:
-    """Build mesh agent list from live process detection."""
+async def _fetch_maestro_registry(client: httpx.AsyncClient) -> dict[str, dict[str, Any]]:
+    try:
+        r = await client.get(f"{AI_MAESTRO_URL}/api/agents", timeout=HTTP_TIMEOUT)
+        body = r.json()
+        agents = body.get("agents", [])
+        return {
+            str(agent.get("name", "")).strip().lower(): agent
+            for agent in agents
+            if agent.get("name")
+        }
+    except Exception:
+        return {}
+
+
+async def _fetch_agents(client: httpx.AsyncClient) -> list[dict[str, Any]]:
+    """Build mesh agent list from runtime detection plus AI Maestro registration data."""
+    maestro_agents = await _fetch_maestro_registry(client)
+    defs_by_name = {agent["name"]: agent for agent in MESH_AGENTS}
+    all_names = list(dict.fromkeys([*defs_by_name.keys(), *maestro_agents.keys()]))
+
     agents = []
-    for defn in MESH_AGENTS:
-        key = defn["name"]
+    for key in all_names:
+        defn = defs_by_name.get(key, {
+            "id": key,
+            "name": key,
+            "label": key,
+            "role": "Registered Agent",
+            "model": None,
+            "color": "#64748b",
+            "detect": None,
+        })
+        maestro = maestro_agents.get(key)
 
         if key == "atlas":
-            status = "online"
-            task = "Lead agent — Mission Control"
+            runtime_status = "online"
+            task = "Atlas lead role — served by Codex or Claude Code"
         elif defn["detect"] and await _is_process_running(defn["detect"]):
-            status = "online"
+            runtime_status = "online"
             task = None
         else:
-            status = "offline"
+            runtime_status = "offline"
             task = None
+
+        orchestration_status = maestro.get("status", "unknown") if maestro else "unregistered"
+        registration_status = "registered" if maestro else "local-only"
+        address = None
+        if maestro:
+            addresses = (((maestro.get("tools") or {}).get("amp") or {}).get("addresses")) or []
+            primary = next((item for item in addresses if item.get("primary")), addresses[0] if addresses else None)
+            if primary:
+                address = primary.get("address")
 
         agents.append({
             "id": defn["id"],
             "name": defn["name"],
             "label": defn["label"],
             "role": defn["role"],
-            "model": defn["model"],
+            "model": (maestro or {}).get("model") or defn["model"],
             "color": defn["color"],
-            "status": status,
-            "task": task,
+            "status": runtime_status,
+            "runtime_status": runtime_status,
+            "registration_status": registration_status,
+            "orchestration_status": orchestration_status,
+            "health_status": "unknown",
+            "status_reason": None,
+            "task": task or (maestro or {}).get("taskDescription"),
             "host": os.getenv("MESH_HOST", "localhost"),
-            "address": None,
-            "last_active": None,
+            "address": address,
+            "program": (maestro or {}).get("program"),
+            "last_active": (maestro or {}).get("lastActive"),
+            "tier": defn.get("tier"),
+            "routing_group": defn.get("routing_group"),
+            "scarce": defn.get("scarce", False),
+            "default_for": defn.get("default_for", []),
+            "reserve_for": defn.get("reserve_for", []),
+            "fallback_to": defn.get("fallback_to"),
+            "local_profiles": defn.get("local_profiles", []),
         })
 
     return agents
+
+
+def _finalize_agents(
+    agents: list[dict[str, Any]],
+    services: dict[str, Any],
+    last_active: dict[str, str | None],
+) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    defs_by_name = {entry["name"]: entry for entry in MESH_AGENTS}
+    hermes_service = services.get("hermes_gateway", {})
+    maestro_service = services.get("aimaestro", {})
+    availability_overrides = _availability_overrides()
+
+    for agent in agents:
+        enriched = dict(agent)
+        name = str(agent.get("name", "")).lower()
+        runtime_status = agent.get("runtime_status", agent.get("status", "offline"))
+        orchestration_status = agent.get("orchestration_status", "unknown")
+        effective_last_active = last_active.get(name) or agent.get("last_active")
+        activity_status, activity_age_seconds = _activity_summary(effective_last_active)
+        override = availability_overrides.get(name, {}) if isinstance(availability_overrides.get(name), dict) else {}
+        availability_status = "available"
+        availability_reason = None
+
+        if runtime_status == "offline" and activity_status == "stale":
+            availability_status = "offline"
+        if override:
+            availability_status = override.get("availability", availability_status)
+            availability_reason = override.get("note")
+
+        if name == "hermes":
+            health_status = "healthy" if hermes_service.get("status") == "up" else "degraded"
+            status_reason = (
+                "Hermes runtime detected; gateway is running cron-only"
+                if hermes_service.get("detail", {}).get("mode") == "cron-only"
+                else "Hermes runtime detected"
+            )
+        elif runtime_status == "online":
+            health_status = "healthy"
+            status_reason = "Local runtime detected"
+        elif agent.get("registration_status") == "registered":
+            health_status = "offline" if activity_status == "stale" else "degraded"
+            freshness = f", last active {activity_status}" if activity_status != "unknown" else ""
+            status_reason = f"Registered in AI Maestro ({orchestration_status}) but no local runtime detected{freshness}"
+        else:
+            health_status = "offline"
+            status_reason = "No local runtime detected"
+
+        if runtime_status == "online":
+            presence_kind = "local-runtime"
+            presence_status = "online"
+            presence_reason = "Local runtime detected"
+        elif agent.get("registration_status") == "registered":
+            presence_kind = "external-registration"
+            presence_status = "registered"
+            presence_reason = "Registered in orchestration, but no local runtime detected"
+        else:
+            presence_kind = "local-runtime"
+            presence_status = "offline"
+            presence_reason = "No local runtime or external registration detected"
+
+        enriched["last_active"] = effective_last_active
+        enriched["activity_status"] = activity_status
+        enriched["activity_age_seconds"] = activity_age_seconds
+        enriched["recently_active"] = activity_status in {"live", "recent", "idle"}
+        enriched["availability_status"] = availability_status
+        enriched["availability_reason"] = availability_reason
+        enriched["health_status"] = health_status
+        enriched["status_reason"] = status_reason
+        enriched["presence"] = {
+            "kind": presence_kind,
+            "status": presence_status,
+            "reason": presence_reason,
+        }
+        enriched["orchestration_reachable"] = maestro_service.get("status") == "up"
+        profiles = defs_by_name.get(name, {}).get("local_profiles", agent.get("local_profiles", []))
+        enriched["local_profiles"] = [_enrich_local_profile(name, profile) for profile in profiles]
+        result.append(enriched)
+
+    return result
 
 
 def _detect_voice_active() -> bool:
@@ -732,13 +1326,84 @@ async def _openviking_watchdog():
 # Background polling task
 # ---------------------------------------------------------------------------
 
+def _fetch_agent_last_active(hermes_status: dict, amp_messages: list) -> dict[str, str | None]:
+    """Return {agent_name: iso_timestamp} for real last-active times."""
+    result: dict[str, str | None] = {}
+
+    # Hermes: use latest session mtime from hermes_status
+    hermes_ts = None
+    modified = hermes_status.get("modified")
+    if modified:
+        try:
+            from datetime import timezone as _tz
+            hermes_ts = datetime.fromtimestamp(modified, tz=_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        except Exception:
+            pass
+    # Fall back to AMP bridge log last entry
+    if not hermes_ts:
+        for log_path in _BRIDGE_LOGS:
+            try:
+                lines = [l for l in log_path.read_text().splitlines() if l.strip()]
+                if lines:
+                    m = re.match(r'\[([^\]]+)\]', lines[-1])
+                    if m:
+                        hermes_ts = m.group(1)
+                        break
+            except Exception:
+                pass
+    result["hermes"] = hermes_ts
+
+    # Atlas: latest Claude session file mtime (sessions are .jsonl under projects/)
+    atlas_ts = None
+    try:
+        from datetime import timezone as _tz
+        projects_dir = Path.home() / ".claude" / "projects"
+        files = sorted(projects_dir.rglob("*.jsonl"), key=lambda f: f.stat().st_mtime, reverse=True)
+        if files:
+            atlas_ts = datetime.fromtimestamp(files[0].stat().st_mtime, tz=_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        pass
+    result["atlas"] = atlas_ts
+
+    # AI Maestro local runtime status files for registered agents
+    try:
+        registry = json.loads(AIMAESTRO_REGISTRY_PATH.read_text())
+        latest_by_name: dict[str, str] = {}
+        for agent in registry:
+            name = str(agent.get("name", "")).strip().lower()
+            agent_id = str(agent.get("id", "")).strip()
+            if not name or not agent_id:
+                continue
+            status_path = AIMAESTRO_AGENTS_DIR / agent_id / "status.json"
+            if not status_path.exists():
+                continue
+            try:
+                payload = json.loads(status_path.read_text())
+            except Exception:
+                continue
+            if payload.get("isRunning") is not True:
+                continue
+            last_updated_ms = payload.get("lastUpdated")
+            if not isinstance(last_updated_ms, (int, float)):
+                continue
+            ts = datetime.fromtimestamp(last_updated_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            prev = latest_by_name.get(name)
+            if not prev or ts > prev:
+                latest_by_name[name] = ts
+        result.update(latest_by_name)
+    except Exception:
+        pass
+
+    return result
+
+
 async def _poll_loop():
     async with httpx.AsyncClient() as client:
         while True:
             try:
                 services, agents, memories, trending_repos = await asyncio.gather(
                     _fetch_service_health(client),
-                    _fetch_agents(),
+                    _fetch_agents(client),
                     _fetch_memories(client),
                     _fetch_trending_repos(client),
                 )
@@ -756,7 +1421,10 @@ async def _poll_loop():
                 )
                 _state["services"] = services
                 _update_service_history(services)
-                _state["agents"] = agents
+                _state["llm_active"] = "mlx" if services.get("mlx_server", {}).get("status") == "up" else None
+                last_active = _fetch_agent_last_active(hermes_status, amp_messages)
+                _state["agents"] = _finalize_agents(agents, services, last_active)
+                _state["routing_summary"] = _build_routing_summary(_state["agents"])
                 _state["cron_jobs"] = cron_jobs
                 _state["memories"] = memories
                 _state["voice_active"] = voice_active
@@ -766,6 +1434,7 @@ async def _poll_loop():
                 _state["hermes_status"] = hermes_status
                 _state["memory_monitor_log"] = memory_monitor_log
                 _state["trending_repos"] = trending_repos
+                _state["permission_audit_summary"] = _refresh_permission_audit_summary()
                 _state["last_updated"] = _now_iso()
 
                 await _broadcast_status()
@@ -806,6 +1475,8 @@ async def _broadcast_status():
         "hermes_status": _state["hermes_status"],
         "trending_repos": _state["trending_repos"],
         "service_history": _state["service_history"],
+        "routing_summary": _state["routing_summary"],
+        "permission_audit_summary": _state["permission_audit_summary"],
     }
     data = json.dumps(payload)
     async with _ws_lock:
@@ -1055,12 +1726,18 @@ async def api_health():
     return {
         "services": _state["services"],
         "last_updated": _state["last_updated"],
+        "permission_audit_summary": _state["permission_audit_summary"],
     }
 
 
 @app.get("/api/agents")
 async def api_agents():
     return {"agents": _state["agents"]}
+
+
+@app.get("/api/routing")
+async def api_routing():
+    return _state["routing_summary"]
 
 
 @app.get("/api/cron")
@@ -1219,7 +1896,6 @@ async def api_amp_send(req: AmpSendRequest):
 
 _BRIDGE_LOGS = [
     Path.home() / ".agent-messaging/agents/hermes/bridge.log",
-    Path.home() / ".agent-messaging/agents/iriseye/bridge.log",
 ]
 _BRIDGE_EVENT_RE = re.compile(
     r'\[(?P<ts>[^\]]+)\] \[(?P<id>[^\]]+)\] (?P<msg>.+)'
@@ -1340,6 +2016,151 @@ class SessionLogRequest(BaseModel):
         return v
 
 
+class RouteTaskRequest(BaseModel):
+    task: str
+
+    @field_validator("task")
+    @classmethod
+    def _chk_task(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("task required")
+        if len(v) > 4000:
+            raise ValueError("task too long (max 4000)")
+        return v
+
+
+class TaskSubmitRequest(BaseModel):
+    task: str
+    subject: str | None = None
+    dispatch: bool = False
+
+    @field_validator("task")
+    @classmethod
+    def _chk_submit_task(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("task required")
+        if len(v) > 4000:
+            raise ValueError("task too long (max 4000)")
+        return v
+
+    @field_validator("subject")
+    @classmethod
+    def _chk_subject_optional(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        if len(v) > 200:
+            raise ValueError("subject too long (max 200)")
+        return v
+
+
+class AgentAvailabilityRequest(BaseModel):
+    agent: str
+    availability: str
+    note: str | None = None
+
+    @field_validator("agent")
+    @classmethod
+    def _chk_agent(cls, v: str) -> str:
+        v = v.strip().lower()
+        if not v:
+            raise ValueError("agent required")
+        return v
+
+    @field_validator("availability")
+    @classmethod
+    def _chk_availability(cls, v: str) -> str:
+        allowed = {"available", "rate_limited", "offline"}
+        v = v.strip().lower()
+        if v not in allowed:
+            raise ValueError(f"availability must be one of: {', '.join(sorted(allowed))}")
+        return v
+
+
+class PermissionAuditRequest(BaseModel):
+    source: str
+    decision: str
+    mode: str
+    tool: str | None = None
+    agent: str | None = None
+    reason: str | None = None
+    input_summary: str | None = None
+
+    @field_validator("source")
+    @classmethod
+    def _chk_source(cls, v: str) -> str:
+        v = v.strip().lower()
+        if not v:
+            raise ValueError("source required")
+        if len(v) > 100:
+            raise ValueError("source too long (max 100)")
+        return v
+
+    @field_validator("decision")
+    @classmethod
+    def _chk_decision(cls, v: str) -> str:
+        allowed = {"allow", "deny", "ask", "bypass"}
+        v = v.strip().lower()
+        if v not in allowed:
+            raise ValueError(f"decision must be one of: {', '.join(sorted(allowed))}")
+        return v
+
+    @field_validator("mode")
+    @classmethod
+    def _chk_mode(cls, v: str) -> str:
+        allowed = {"default", "plan", "bypasspermissions", "auto"}
+        v = v.strip().lower()
+        if v not in allowed:
+            raise ValueError(f"mode must be one of: {', '.join(sorted(allowed))}")
+        return v
+
+    @field_validator("tool", "agent", "reason", "input_summary")
+    @classmethod
+    def _normalize_optional(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        if len(v) > 500:
+            raise ValueError("field too long (max 500)")
+        return v
+
+
+class LocalProfileActionRequest(BaseModel):
+    agent: str = "hermes"
+    profile: str
+    action: str
+
+    @field_validator("agent")
+    @classmethod
+    def _chk_profile_agent(cls, v: str) -> str:
+        v = v.strip().lower()
+        if v != "hermes":
+            raise ValueError("only hermes local profiles are currently supported")
+        return v
+
+    @field_validator("profile")
+    @classmethod
+    def _chk_profile_name(cls, v: str) -> str:
+        v = v.strip().lower()
+        if not v:
+            raise ValueError("profile required")
+        return v
+
+    @field_validator("action")
+    @classmethod
+    def _chk_profile_action(cls, v: str) -> str:
+        v = v.strip().lower()
+        if v not in {"start", "stop"}:
+            raise ValueError("action must be start or stop")
+        return v
+
+
 @app.get("/api/sessions/today")
 async def api_sessions_today():
     today = datetime.now().strftime("%Y-%m-%d")
@@ -1369,6 +2190,280 @@ async def api_sessions_log(req: SessionLogRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/routing/recommend")
+async def api_routing_recommend(req: RouteTaskRequest):
+    recommendation = _recommend_route(req.task, _state["agents"])
+    return {
+        **recommendation,
+        "task": req.task,
+        "policy": _state.get("routing_summary", {}).get("policy", "local-first"),
+    }
+
+
+@app.post("/api/tasks/submit")
+async def api_tasks_submit(req: TaskSubmitRequest):
+    recommendation = _recommend_route(req.task, _state["agents"])
+    routing = _state.get("routing_summary", {})
+    premium_available = set(routing.get("premium_available") or [])
+    recommended_agent = recommendation["recommended_agent"]
+
+    status = "routed"
+    if recommendation["task_class"] == "premium" and recommended_agent not in premium_available:
+        status = "deferred"
+
+    subject = req.subject or req.task.splitlines()[0][:80]
+    response: dict[str, Any] = {
+        "status": status,
+        "policy": routing.get("policy", "local-first"),
+        "subject": subject,
+        **recommendation,
+    }
+
+    if not req.dispatch or status == "deferred":
+        if req.dispatch and status == "deferred":
+            _audit_permission_decision(
+                decision="deny",
+                tool="amp-dispatch",
+                agent=recommended_agent,
+                reason="Dispatch deferred because no premium agent is currently available",
+                input_summary=subject,
+            )
+        return response
+
+    amp_bin = os.getenv("AMP_BIN", "/Users/iris/.local/bin/amp-send")
+    env = {**os.environ, "PATH": f"/Users/iris/.local/bin:{os.environ.get('PATH', '')}"}
+    try:
+        result = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: subprocess.run(
+                [amp_bin, recommended_agent, subject, req.task, "--type", "task"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                env=env,
+            ),
+        )
+        if result.returncode != 0:
+            _audit_permission_decision(
+                decision="deny",
+                tool="amp-dispatch",
+                agent=recommended_agent,
+                reason=result.stderr.strip() or f"AMP send failed with exit {result.returncode}",
+                input_summary=subject,
+            )
+            response["status"] = "error"
+            response["error"] = result.stderr.strip() or f"exit {result.returncode}"
+            return response
+        _audit_permission_decision(
+            decision="allow",
+            tool="amp-dispatch",
+            agent=recommended_agent,
+            reason="Task dispatch accepted by Mission Control",
+            input_summary=subject,
+        )
+        response["dispatched"] = True
+        response["output"] = result.stdout.strip()
+        return response
+    except Exception as exc:
+        _audit_permission_decision(
+            decision="deny",
+            tool="amp-dispatch",
+            agent=recommended_agent,
+            reason=str(exc),
+            input_summary=subject,
+        )
+        response["status"] = "error"
+        response["error"] = str(exc)
+        return response
+
+
+@app.get("/api/availability")
+async def api_availability():
+    return {"overrides": _availability_overrides()}
+
+
+@app.post("/api/availability")
+async def api_availability_set(req: AgentAvailabilityRequest):
+    path = AVAILABILITY_OVERRIDES_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    overrides = _availability_overrides()
+    overrides[req.agent] = {
+        "availability": req.availability,
+        "note": req.note,
+        "updated_at": _now_iso(),
+    }
+    path.write_text(json.dumps(overrides, indent=2))
+    _audit_permission_decision(
+        decision="allow",
+        tool="availability-override",
+        agent=req.agent,
+        reason=f"Availability override set to {req.availability}",
+        input_summary=req.note,
+    )
+    return {"ok": True, "overrides": overrides}
+
+
+@app.get("/api/permissions/audit")
+async def api_permissions_audit(last: int = 50):
+    bounded_last = max(1, min(last, 500))
+    entries = _permission_audit_entries(limit=bounded_last)
+    return {
+        "entries": entries,
+        "summary": _summarize_permission_audit(entries),
+    }
+
+
+@app.post("/api/permissions/audit")
+async def api_permissions_audit_log(req: PermissionAuditRequest):
+    entry = _append_permission_audit(req.model_dump())
+    return {
+        "ok": True,
+        "entry": entry,
+        "summary": _state["permission_audit_summary"],
+    }
+
+
+@app.post("/api/local-profiles/action")
+async def api_local_profiles_action(req: LocalProfileActionRequest):
+    hermes = next((agent for agent in _state["agents"] if agent.get("name") == req.agent), None)
+    if not hermes:
+        _audit_permission_decision(
+            decision="deny",
+            tool="local-profile-action",
+            agent=req.agent,
+            reason="Hermes agent not found in current mesh state",
+            input_summary=f"{req.profile}:{req.action}",
+        )
+        raise HTTPException(status_code=404, detail="hermes agent not found")
+
+    profile = next((item for item in (hermes.get("local_profiles") or []) if item.get("name") == req.profile), None)
+    if not profile:
+        _audit_permission_decision(
+            decision="deny",
+            tool="local-profile-action",
+            agent=req.agent,
+            reason=f"Profile not found: {req.profile}",
+            input_summary=f"{req.profile}:{req.action}",
+        )
+        raise HTTPException(status_code=404, detail=f"profile not found: {req.profile}")
+
+    if req.action == "stop":
+        pid_path = _profile_pid_path(req.agent, req.profile)
+        pid = _read_pid(pid_path)
+        if not pid:
+            _audit_permission_decision(
+                decision="allow",
+                tool="local-profile-action",
+                agent=req.agent,
+                reason=f"Stop request accepted; profile {req.profile} was not running",
+                input_summary=f"{req.profile}:stop",
+            )
+            return {"ok": True, "status": "not_running", "profile": req.profile}
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            pass
+        pid_path.unlink(missing_ok=True)
+        _audit_permission_decision(
+            decision="allow",
+            tool="local-profile-action",
+            agent=req.agent,
+            reason=f"Stopped local profile {req.profile}",
+            input_summary=f"{req.profile}:stop",
+        )
+        return {"ok": True, "status": "stopped", "profile": req.profile}
+
+    if profile.get("mode") != "on-demand":
+        _audit_permission_decision(
+            decision="allow",
+            tool="local-profile-action",
+            agent=req.agent,
+            reason=f"Profile {req.profile} is already active and not on-demand",
+            input_summary=f"{req.profile}:start",
+        )
+        return {"ok": True, "status": "already_active", "profile": req.profile}
+    if not profile.get("installed"):
+        _audit_permission_decision(
+            decision="deny",
+            tool="local-profile-action",
+            agent=req.agent,
+            reason=f"Model not installed locally for profile {req.profile}",
+            input_summary=f"{req.profile}:start",
+        )
+        raise HTTPException(status_code=400, detail=f"model not installed locally: {profile.get('model_path')}")
+    if not MLX_SERVER_BIN.exists():
+        _audit_permission_decision(
+            decision="deny",
+            tool="local-profile-action",
+            agent=req.agent,
+            reason="mlx_lm.server binary is not available",
+            input_summary=f"{req.profile}:start",
+        )
+        raise HTTPException(status_code=400, detail=f"mlx_lm.server not found at {MLX_SERVER_BIN}")
+    if profile.get("running"):
+        _audit_permission_decision(
+            decision="allow",
+            tool="local-profile-action",
+            agent=req.agent,
+            reason=f"Profile {req.profile} is already running",
+            input_summary=f"{req.profile}:start",
+        )
+        return {"ok": True, "status": "already_running", "profile": req.profile, "base_url": profile.get("base_url")}
+
+    port = profile.get("port")
+    model_path = profile.get("model_path")
+    if not port or not model_path:
+        _audit_permission_decision(
+            decision="deny",
+            tool="local-profile-action",
+            agent=req.agent,
+            reason="Profile missing port or model path",
+            input_summary=f"{req.profile}:start",
+        )
+        raise HTTPException(status_code=400, detail="profile missing port or model path")
+
+    MESH_PROFILE_RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    pid_path = _profile_pid_path(req.agent, req.profile)
+    log_path = _profile_log_path(req.agent, req.profile)
+    with open(log_path, "ab") as log_handle:
+        proc = subprocess.Popen(
+            [
+                str(MLX_SERVER_BIN),
+                "--model", str(model_path),
+                "--host", "0.0.0.0",
+                "--port", str(port),
+                "--prompt-cache-bytes", str(536870912),
+                "--max-tokens", str(1024),
+                "--decode-concurrency", "1",
+                "--prompt-concurrency", "1",
+            ],
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            env={
+                **os.environ,
+                "PATH": f"{MLX_VENV_BIN}:{os.environ.get('PATH', '')}",
+                "VIRTUAL_ENV": str(MLX_VENV_BIN.parent),
+            },
+        )
+    pid_path.write_text(str(proc.pid))
+    _audit_permission_decision(
+        decision="allow",
+        tool="local-profile-action",
+        agent=req.agent,
+        reason=f"Started local profile {req.profile}",
+        input_summary=f"{req.profile}:start",
+    )
+    return {
+        "ok": True,
+        "status": "started",
+        "profile": req.profile,
+        "pid": proc.pid,
+        "base_url": profile.get("base_url"),
+        "log_path": str(log_path),
+    }
+
+
 @app.get("/api/status")
 async def api_status():
     jobs = []
@@ -1382,8 +2477,11 @@ async def api_status():
         "services": _state["services"],
         "agents": _state["agents"],
         "cron_jobs": jobs,
+        "routing_summary": _state["routing_summary"],
+        "permission_audit_summary": _state["permission_audit_summary"],
         "memories": _state["memories"],
         "llm_models": _state["llm_models"],
+        "llm_active": _state["llm_active"],
     }
 
 
@@ -1413,7 +2511,7 @@ def _build_atlas_messages(req: "ChatRequest") -> list[dict]:
     )
     system_content = ATLAS_SYSTEM_PROMPT.format(mesh_status=mesh_status)
     messages: list[dict] = [{"role": "system", "content": system_content}]
-    for m in req.history:
+    for m in req.history[-10:]:
         messages.append({"role": m.role, "content": m.content})
     messages.append({"role": "user", "content": req.message})
     return messages
@@ -1421,58 +2519,14 @@ def _build_atlas_messages(req: "ChatRequest") -> list[dict]:
 
 @app.post("/api/chat")
 async def api_chat(req: ChatRequest):
-    """Non-streaming chat via MLX (falls back to Claude CLI if MLX is down)."""
-    # Try MLX first
-    if _state.get("llm_active") == "mlx":
-        messages = _build_atlas_messages(req)
-        text = await _mlx_chat_complete(messages)
-        if not text.startswith("[MLX unavailable"):
-            return {"response": text}
-
-    # Fallback: Claude CLI
-    claude_bin = shutil.which("claude")
-    if not claude_bin:
-        return {"error": "MLX unavailable and claude CLI not found in PATH"}
-
-    mesh_status = json.dumps(
-        {
-            "services": {k: v.get("status") for k, v in _state["services"].items()},
-            "agents": [{"name": a["name"], "status": a["status"]} for a in _state["agents"]],
-            "last_updated": _state["last_updated"],
-        },
-        indent=2,
-    )
-    system = ATLAS_SYSTEM_PROMPT.format(mesh_status=mesh_status)
-    parts = [system, ""]
-    for m in req.history:
-        prefix = MESH_OPERATOR if m.role == "user" else "Atlas"
-        parts.append(f"{prefix}: {m.content}")
-    parts.append(f"{MESH_OPERATOR}: {req.message}")
-    parts.append("Atlas:")
-    prompt = "\n".join(parts)
-
-    try:
-        result = await asyncio.wait_for(
-            asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: subprocess.run(
-                    [claude_bin, "-p", prompt],
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                ),
-            ),
-            timeout=65,
-        )
-        if result.returncode != 0:
-            err = result.stderr.strip() or "non-zero exit"
-            return {"error": f"claude CLI error: {err}"}
-        text = result.stdout.strip()
-        return {"response": text or "No response generated"}
-    except asyncio.TimeoutError:
-        return {"error": "Atlas timed out"}
-    except Exception as exc:
-        return {"error": f"Chat failed: {exc}"}
+    """Non-streaming chat via MLX only."""
+    if _state.get("llm_active") != "mlx":
+        return {"error": "MLX server unavailable — start it with `mlx-server`", "mlx_down": True}
+    messages = _build_atlas_messages(req)
+    text = await _mlx_chat_complete(messages)
+    if text.startswith("[MLX unavailable"):
+        return {"error": text, "mlx_down": True}
+    return {"response": text}
 
 
 @app.post("/api/chat/stream")

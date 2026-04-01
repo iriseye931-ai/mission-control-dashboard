@@ -6,12 +6,49 @@ export interface Agent {
   label?: string
   avatar?: string
   status: string
+  runtime_status?: string
+  registration_status?: string
+  orchestration_status?: string
+  health_status?: string
+  orchestration_reachable?: boolean
+  status_reason?: string | null
+  activity_status?: string
+  activity_age_seconds?: number | null
+  recently_active?: boolean
+  availability_status?: string
+  availability_reason?: string | null
+  tier?: string
+  routing_group?: string
+  scarce?: boolean
+  default_for?: string[]
+  reserve_for?: string[]
+  fallback_to?: string | null
   model?: string
   last_active?: string
   program?: string
   host?: string
   address?: string
   task?: string
+  presence?: {
+    kind: string
+    status: string
+    reason?: string | null
+  }
+  local_profiles?: {
+    name: string
+    model: string
+    model_path?: string
+    base_url?: string
+    purpose?: string
+    mode?: string
+    installed?: boolean
+    running?: boolean
+    startable?: boolean
+    managed?: boolean
+    port?: number
+    pid?: number | null
+    log_path?: string
+  }[]
 }
 
 export interface ServiceHealth {
@@ -84,6 +121,35 @@ export interface HermesStatus {
   modified?: number
 }
 
+export interface RoutingSummary {
+  policy: string
+  premium_pool: string[]
+  premium_available: string[]
+  premium_available_count: number
+  premium_total_count: number
+  local_default?: string
+  specialized_agents: string[]
+  guidance?: Record<string, string>
+}
+
+export interface PermissionAuditSummary {
+  count: number
+  decision_counts: Record<string, number>
+  mode_counts: Record<string, number>
+  last_event_at?: string | null
+}
+
+export interface PermissionAuditEntry {
+  timestamp: string
+  source: string
+  agent?: string | null
+  tool?: string | null
+  decision: string
+  mode: string
+  reason?: string | null
+  input_summary?: string | null
+}
+
 export interface MeshLogs {
   mlx: string[]
   memory: string[]
@@ -134,6 +200,8 @@ export interface StatusUpdate {
   logs?: MeshLogs
   amp_messages?: AmpMessage[]
   hermes_status?: HermesStatus
+  routing_summary?: RoutingSummary
+  permission_audit_summary?: PermissionAuditSummary
   trending_repos?: TrendingRepo[]
   insights?: MeshInsight[]
 }
