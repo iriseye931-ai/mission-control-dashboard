@@ -10,31 +10,28 @@ Real-time dashboard for multi-agent AI systems — built for the **Claude Code +
 
 ## What it shows
 
-Most local AI setups are invisible — agents running in terminals, logs scattered, no idea what's happening across the mesh. This fixes that.
+Most local AI setups are invisible. Agents run in separate terminals, routing decisions disappear into logs, memory health is hard to interpret, and operator state gets scattered across tools. This dashboard pulls that into one live surface.
 
-- **KPI strip** — live Agents Online, MLX server status, system RAM, AMP queue depth, CPU — always visible at the top
-- **Agent status** — every agent (Atlas, Hermes, iriseye) with current state, pulsing dot, color-coded
-- **Service pills** — OpenViking, MLX, MemMCP, OpenClaw, Ollama — up/down at a glance
-- **Mesh graph** — animated canvas topology: hexagonal agent nodes, radial service nodes, animated pulse dots on active edges
-- **AMP events feed** — live routing log from Hermes + iriseye bridges (route=mlx, route=hermes, reply sent)
-- **AMP inbox** — messages in/out of AI Maestro
-- **MLX tab** — arc gauge showing MLX RAM pressure, model stats, PID, inference engine
-- **Memory monitor** — OpenViking recall activity
-- **Cron/schedule** — Hermes scheduled tasks with progress bars
-- **Mesh insights** — cross-agent pattern analysis
-- **Activity feed** — unified event stream
+- **Permanent agent dock** — Lead, Hermes, and IrisEye stay pinned with status, model, presence, runtime, and current task
+- **Cinematic mesh sphere** — animated agent/service topology with active-node motion, routing emphasis, and memory-aware link states
+- **Ops strip + alerts** — live service health, memory mode, route target, and highest-priority operator alert at a glance
+- **Operator utility block** — cron, audit, queue, and memory alert counts without leaving the main view
+- **System panel** — CPU, RAM, MLX, and local-use telemetry in the canvas HUD
+- **Bottom telemetry rail** — quick system totals for memory, MLX load, CPU load, disk, and mesh availability
+- **Memory route intelligence** — backend memory summary, cause ranking, and routing impact surfaced directly in the dashboard
+- **Clickable summaries** — operator chips and service indicators focus the matching service or agent in the mesh
 
 ---
 
 ## Design
 
-Premium dark-mode terminal aesthetic. No scroll, no hidden panels.
+Premium dark-mode terminal aesthetic with a mesh-first operator layout. No cloud dependency, no tab hunting, no fake glassmorphism.
 
-- **Full-bleed layout** — header → KPI strip → body, zero overflow
-- **Vertical tab rail** — right sidebar with single-click tabs: MLX / Memory / Schedule / Insights / Activity
-- **Square mesh graph viewport** — `Math.min(W, H) × 0.92` ensures the graph never stretches regardless of window shape
-- **Unified color palette** — `#08080f` background, cyan/purple/green/yellow/red accent system consistent across every component
-- **No duplicates** — CPU and RAM in KPI strip only; MLX tab focuses on inference-specific metrics
+- **Mesh-first composition** — the sphere is the product center, not a decorative background
+- **Permanent operator dock** — agent state stays visible instead of hiding behind modal panels or tabs
+- **Responsive HUD clearance** — the sphere respects the top operator stack and side dock instead of overlapping them
+- **Unified accent language** — warm gold, cyan, violet, amber, and red are used consistently for identity and state
+- **State-aware motion** — node glow, reticles, and memory-path coloring respond to live routing and degradation causes
 
 ---
 
