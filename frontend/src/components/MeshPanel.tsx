@@ -290,6 +290,9 @@ function HermesTab({
     hermesNativeProfiles.map((profile) => [profile.hermes_profile ?? profile.display_name ?? profile.name, profile]),
   )
   const checkpointReadyProfiles = hermesNativeProfiles.filter((profile) => profile.checkpoint_overview?.rollback_ready).length
+  const providerReadyProfiles = hermesNativeProfiles.filter((profile) => profile.provider_overview?.primary?.provider).length
+  const smartRoutingProfiles = hermesNativeProfiles.filter((profile) => profile.provider_overview?.smart_routing_enabled).length
+  const fallbackProfiles = hermesNativeProfiles.filter((profile) => (profile.provider_overview?.fallback_count ?? 0) > 0).length
   const focusedAgent = focus?.type === 'agent'
     ? agents.find((agent) => (agent.name ?? '').toLowerCase().replace(/\s+/g, '-') === focus.key)
     : null
@@ -664,6 +667,53 @@ function HermesTab({
                         </div>
                       </div>
                     ))}
+                  </div>
+                )}
+                {hermesNativeProfiles.length > 0 && (
+                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid rgba(15,23,42,0.45)' }}>
+                    <div style={{ fontSize: 8, color: '#475569', fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: 8 }}>
+                      provider graph
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8 }}>
+                      <MiniStat label="profiles" value={`${providerReadyProfiles}/${hermesNativeProfiles.length}`} tone={providerReadyProfiles > 0 ? '#10b981' : '#94a3b8'} />
+                      <MiniStat label="fallback" value={`${fallbackProfiles}/${hermesNativeProfiles.length}`} tone={fallbackProfiles > 0 ? '#f59e0b' : '#94a3b8'} />
+                      <MiniStat label="smart" value={`${smartRoutingProfiles}/${hermesNativeProfiles.length}`} tone={smartRoutingProfiles > 0 ? '#67e8f9' : '#94a3b8'} />
+                    </div>
+                    {activeProfileMeta?.provider_overview && (
+                      <div style={{ marginTop: 10, display: 'grid', gap: 6 }}>
+                        <div style={{ fontSize: 9, color: '#cbd5e1', fontFamily: 'monospace' }}>
+                          {(activeProfileMeta.display_name ?? activeProfileMeta.hermes_profile ?? activeProfileMeta.name)} · {activeProfileMeta.provider_overview.primary?.provider ?? 'unconfigured'}
+                        </div>
+                        {activeProfileMeta.provider_overview.primary?.model && (
+                          <div style={{ fontSize: 8, color: '#64748b', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                            primary: {activeProfileMeta.provider_overview.primary.model}
+                          </div>
+                        )}
+                        {activeProfileMeta.provider_overview.cheap_model?.model && (
+                          <div style={{ fontSize: 8, color: '#334155', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                            cheap route: {activeProfileMeta.provider_overview.cheap_model.model}
+                          </div>
+                        )}
+                        {(activeProfileMeta.provider_overview.fallback_count ?? 0) > 0 && (
+                          <div style={{ fontSize: 8, color: '#334155', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                            fallback: {activeProfileMeta.provider_overview.fallbacks.map((fallback) => fallback.model ?? fallback.provider ?? 'fallback').join(' · ')}
+                          </div>
+                        )}
+                        {(activeProfileMeta.provider_overview.auxiliary_count ?? 0) > 0 && (
+                          <div style={{ fontSize: 8, color: '#475569', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                            auxiliary: {Object.keys(activeProfileMeta.provider_overview.auxiliary).join(', ')}
+                          </div>
+                        )}
+                        {activeProfileMeta.provider_overview.delegation?.model && (
+                          <div style={{ fontSize: 8, color: '#475569', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                            delegation: {activeProfileMeta.provider_overview.delegation.model}
+                          </div>
+                        )}
+                        <div style={{ fontSize: 8, color: '#334155', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                          endpoints: {activeProfileMeta.provider_overview.unique_endpoint_count} · models: {activeProfileMeta.provider_overview.unique_model_count}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
                 {hermesNativeProfiles.length > 0 && (
@@ -1096,6 +1146,11 @@ function HermesTab({
                           {profile.provider && (
                             <div style={{ fontSize: 8, color: '#334155', fontFamily: 'monospace', lineHeight: 1.5 }}>
                               provider: {profile.provider}
+                            </div>
+                          )}
+                          {profile.provider_overview && (
+                            <div style={{ fontSize: 8, color: '#475569', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                              provider graph: {profile.provider_overview.smart_routing_enabled ? 'smart' : 'fixed'} · {profile.provider_overview.fallback_count} fallback · {profile.provider_overview.auxiliary_count} aux
                             </div>
                           )}
                           {profile.base_url && (

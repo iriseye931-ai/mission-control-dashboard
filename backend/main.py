@@ -565,6 +565,7 @@ def _enrich_local_profile(agent_name: str, profile: dict[str, Any]) -> dict[str,
         enriched["session_overview"] = _fetch_hermes_profile_session_overview(profile_home, hermes_profile)
         enriched["quick_commands"] = _read_hermes_quick_commands(profile_home)
         enriched["checkpoint_overview"] = _fetch_hermes_checkpoint_overview(profile_home, hermes_profile)
+        enriched["provider_overview"] = _fetch_hermes_provider_overview(profile_home)
         return enriched
     model_path = _resolve_profile_model(profile)
     pid_path = _profile_pid_path(agent_name, str(profile.get("name", "")))
@@ -696,6 +697,70 @@ def _fetch_hermes_checkpoint_overview(profile_home: Path, profile_name: str) -> 
         "rollback_ready": enabled and bool(snapshot_dirs),
         "rollback_diff_hint": f"{resume_command} then run /rollback diff",
         "rollback_hint": f"{resume_command} then run /rollback",
+    }
+
+
+def _provider_brief(spec: Any) -> dict[str, Any] | None:
+    if not isinstance(spec, dict):
+        return None
+    provider = str(spec.get("provider") or "").strip() or None
+    model = str(spec.get("model") or spec.get("default") or "").strip() or None
+    base_url = str(spec.get("base_url") or "").strip() or None
+    if not any((provider, model, base_url)):
+        return None
+    return {
+        "provider": provider,
+        "model": model,
+        "base_url": base_url,
+    }
+
+
+def _fetch_hermes_provider_overview(profile_home: Path) -> dict[str, Any]:
+    config = _read_hermes_profile_config(profile_home)
+    primary = _provider_brief(config.get("model")) or {}
+    fallback_specs = config.get("fallback_providers")
+    fallback_specs = fallback_specs if isinstance(fallback_specs, list) else []
+    fallbacks = [brief for brief in (_provider_brief(item) for item in fallback_specs) if brief]
+
+    smart_cfg = config.get("smart_model_routing")
+    smart_cfg = smart_cfg if isinstance(smart_cfg, dict) else {}
+    cheap_model = _provider_brief(smart_cfg.get("cheap_model"))
+
+    auxiliary_cfg = config.get("auxiliary")
+    auxiliary_cfg = auxiliary_cfg if isinstance(auxiliary_cfg, dict) else {}
+    auxiliary = {
+        name: brief
+        for name, brief in (
+            (str(name), _provider_brief(spec))
+            for name, spec in auxiliary_cfg.items()
+            if isinstance(name, str)
+        )
+        if brief
+    }
+
+    delegation = _provider_brief(config.get("delegation"))
+    endpoints = {
+        item.get("base_url")
+        for item in [primary, cheap_model, delegation, *fallbacks, *auxiliary.values()]
+        if item and item.get("base_url")
+    }
+    models = {
+        item.get("model")
+        for item in [primary, cheap_model, delegation, *fallbacks, *auxiliary.values()]
+        if item and item.get("model")
+    }
+
+    return {
+        "primary": primary or None,
+        "fallbacks": fallbacks,
+        "fallback_count": len(fallbacks),
+        "smart_routing_enabled": bool(smart_cfg.get("enabled")),
+        "cheap_model": cheap_model,
+        "auxiliary": auxiliary,
+        "auxiliary_count": len(auxiliary),
+        "delegation": delegation,
+        "unique_endpoint_count": len(endpoints),
+        "unique_model_count": len(models),
     }
 
 

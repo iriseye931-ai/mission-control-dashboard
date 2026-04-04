@@ -73,6 +73,38 @@ export interface Agent {
       rollback_diff_hint?: string
       rollback_hint?: string
     }
+    provider_overview?: {
+      primary?: {
+        provider?: string | null
+        model?: string | null
+        base_url?: string | null
+      } | null
+      fallbacks: {
+        provider?: string | null
+        model?: string | null
+        base_url?: string | null
+      }[]
+      fallback_count: number
+      smart_routing_enabled: boolean
+      cheap_model?: {
+        provider?: string | null
+        model?: string | null
+        base_url?: string | null
+      } | null
+      auxiliary: Record<string, {
+        provider?: string | null
+        model?: string | null
+        base_url?: string | null
+      }>
+      auxiliary_count: number
+      delegation?: {
+        provider?: string | null
+        model?: string | null
+        base_url?: string | null
+      } | null
+      unique_endpoint_count: number
+      unique_model_count: number
+    }
     session_overview?: {
       profile: string
       session_count: number

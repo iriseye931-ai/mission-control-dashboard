@@ -26,6 +26,7 @@ from main import (
     _cleanup_hermes_worktree,
     _finalize_agents,
     _fetch_hermes_checkpoint_overview,
+    _fetch_hermes_provider_overview,
     _fetch_hermes_profile_session_overview,
     _fetch_hermes_sessions_overview,
     _refresh_background_task_state,
@@ -459,6 +460,43 @@ class TestHermesSessions:
         assert overview["enabled"] is False
         assert overview["snapshot_count"] == 0
         assert overview["rollback_ready"] is False
+
+    def test_provider_overview_reads_routing_and_fallbacks(self, tmp_path):
+        profile_home = tmp_path / "mesh-sidecar"
+        profile_home.mkdir(parents=True)
+        (profile_home / "config.yaml").write_text(
+            "model:\n"
+            "  default: /models/main\n"
+            "  provider: custom\n"
+            "  base_url: http://127.0.0.1:8081/v1\n"
+            "fallback_providers:\n"
+            "  - provider: custom\n"
+            "    model: /models/fallback\n"
+            "    base_url: http://127.0.0.1:8083/v1\n"
+            "smart_model_routing:\n"
+            "  enabled: true\n"
+            "  cheap_model:\n"
+            "    provider: custom\n"
+            "    model: /models/cheap\n"
+            "    base_url: http://127.0.0.1:8083/v1\n"
+            "auxiliary:\n"
+            "  session_search:\n"
+            "    provider: custom\n"
+            "    model: /models/cheap\n"
+            "    base_url: http://127.0.0.1:8083/v1\n"
+            "delegation:\n"
+            "  provider: custom\n"
+            "  model: /models/main\n"
+            "  base_url: http://127.0.0.1:8081/v1\n"
+        )
+
+        overview = _fetch_hermes_provider_overview(profile_home)
+        assert overview["primary"]["model"] == "/models/main"
+        assert overview["fallback_count"] == 1
+        assert overview["smart_routing_enabled"] is True
+        assert overview["cheap_model"]["model"] == "/models/cheap"
+        assert overview["auxiliary_count"] == 1
+        assert overview["delegation"]["model"] == "/models/main"
 
 
 class TestHermesBackgroundTasks:
