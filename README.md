@@ -18,7 +18,7 @@ Real-time dashboard for multi-agent AI systems — built for the **Claude Code +
 
 ## Visuals
 
-- [Full dashboard capture](assets/dashboard-full.png)
+- [Current dashboard capture](assets/dashboard-full.png)
 - [Focused preview capture](assets/dashboard-preview.png)
 - [Release history](CHANGELOG.md)
 
