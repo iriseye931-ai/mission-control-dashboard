@@ -51,6 +51,10 @@ AMP_AGENTS_DIR = Path.home() / ".agent-messaging" / "agents"
 HERMES_SESSIONS_DIR = Path.home() / ".hermes" / "sessions"
 HERMES_GATEWAY_STATE_PATH = Path.home() / ".hermes" / "gateway_state.json"
 HERMES_GATEWAY_PID_PATH = Path.home() / ".hermes" / "gateway.pid"
+HERMES_HOME = Path.home() / ".hermes"
+HERMES_PROFILES_DIR = HERMES_HOME / "profiles"
+LOCAL_BIN_DIR = Path.home() / ".local" / "bin"
+HERMES_BIN = Path(shutil.which("hermes") or "/Users/iris/.local/bin/hermes")
 AIMAESTRO_AGENTS_DIR = Path.home() / ".aimaestro" / "agents"
 AIMAESTRO_REGISTRY_PATH = AIMAESTRO_AGENTS_DIR / "registry.json"
 AVAILABILITY_OVERRIDES_PATH = Path.home() / ".mesh" / "availability_overrides.json"
@@ -512,6 +516,31 @@ def _read_pid(path: Path) -> int | None:
 
 def _enrich_local_profile(agent_name: str, profile: dict[str, Any]) -> dict[str, Any]:
     enriched = dict(profile)
+    if str(profile.get("profile_kind") or "").strip() == "hermes-native":
+        hermes_profile = str(profile.get("hermes_profile") or "default").strip() or "default"
+        profile_home = _hermes_profile_home(hermes_profile)
+        alias_path = _hermes_profile_alias_path(hermes_profile)
+        gateway_state = _read_hermes_gateway_state(profile_home)
+        gateway_pid = _read_pid(profile_home / "gateway.pid")
+        running = _pid_running(gateway_pid) or str(gateway_state.get("status", "")).lower() == "running"
+        exists = profile_home.exists()
+        model_info = _read_hermes_profile_model(profile_home)
+        enriched["installed"] = exists
+        enriched["running"] = running
+        enriched["startable"] = exists and HERMES_BIN.exists()
+        enriched["managed"] = True
+        enriched["pid"] = gateway_pid if _pid_running(gateway_pid) else None
+        enriched["port"] = _extract_port(model_info.get("base_url"))
+        enriched["model"] = model_info.get("model") or enriched.get("model") or "Hermes profile"
+        enriched["base_url"] = model_info.get("base_url") or enriched.get("base_url")
+        enriched["provider"] = model_info.get("provider")
+        enriched["profile_home"] = str(profile_home)
+        enriched["alias_path"] = str(alias_path) if hermes_profile != "default" else None
+        enriched["alias_installed"] = alias_path.exists() if hermes_profile != "default" else False
+        enriched["gateway_status"] = gateway_state.get("status")
+        enriched["runtime"] = "hermes-profile"
+        enriched["display_name"] = str(profile.get("display_name") or hermes_profile)
+        return enriched
     model_path = _resolve_profile_model(profile)
     pid_path = _profile_pid_path(agent_name, str(profile.get("name", "")))
     log_path = _profile_log_path(agent_name, str(profile.get("name", "")))
@@ -528,7 +557,72 @@ def _enrich_local_profile(agent_name: str, profile: dict[str, Any]) -> dict[str,
     enriched["port"] = port
     enriched["managed"] = bool(profile.get("managed")) or profile.get("mode") == "on-demand"
     enriched["log_path"] = str(log_path)
+    enriched["runtime"] = "mlx-server"
+    enriched["display_name"] = str(profile.get("display_name") or profile.get("name") or "")
     return enriched
+
+
+def _hermes_profile_home(profile_name: str) -> Path:
+    safe = (profile_name or "default").strip()
+    if not safe or safe == "default":
+        return HERMES_HOME
+    return HERMES_PROFILES_DIR / safe
+
+
+def _hermes_profile_alias_path(profile_name: str) -> Path:
+    return LOCAL_BIN_DIR / profile_name
+
+
+def _read_hermes_gateway_state(profile_home: Path) -> dict[str, Any]:
+    state_path = profile_home / "gateway_state.json"
+    data = _read_json(state_path)
+    return data if isinstance(data, dict) else {}
+
+
+def _read_hermes_profile_model(profile_home: Path) -> dict[str, str | None]:
+    config_path = profile_home / "config.yaml"
+    if not config_path.exists():
+        return {"model": None, "provider": None, "base_url": None}
+    try:
+        text = config_path.read_text(errors="replace")
+    except Exception:
+        return {"model": None, "provider": None, "base_url": None}
+
+    def _match(pattern: str) -> str | None:
+        m = re.search(pattern, text, re.MULTILINE)
+        if not m:
+            return None
+        return (m.group(1) or "").strip() or None
+
+    return {
+        "model": _match(r"^  model:\s*(.+)$"),
+        "provider": _match(r"^  provider:\s*(.+)$"),
+        "base_url": _match(r"^  base_url:\s*(.+)$"),
+    }
+
+
+def _discover_hermes_native_profiles() -> list[dict[str, Any]]:
+    profiles: list[dict[str, Any]] = []
+    names = ["default"]
+    try:
+        if HERMES_PROFILES_DIR.exists():
+            names.extend(sorted(path.name for path in HERMES_PROFILES_DIR.iterdir() if path.is_dir()))
+    except Exception:
+        pass
+
+    for name in names:
+        key = f"profile:{name}"
+        profiles.append({
+            "name": key,
+            "display_name": name,
+            "hermes_profile": name,
+            "profile_kind": "hermes-native",
+            "purpose": "isolated Hermes profile with separate config, memory, sessions, and gateway",
+            "mode": "profile",
+            "managed": True,
+            "model": "Hermes profile",
+        })
+    return profiles
 
 
 def _recommend_local_profile(task: str, agents: list[dict[str, Any]], recommended_agent: str) -> dict[str, Any] | None:
@@ -1054,7 +1148,12 @@ def _finalize_agents(
             "reason": presence_reason,
         }
         enriched["orchestration_reachable"] = maestro_service.get("status") == "up"
-        profiles = defs_by_name.get(name, {}).get("local_profiles", agent.get("local_profiles", []))
+        profiles = list(defs_by_name.get(name, {}).get("local_profiles", agent.get("local_profiles", [])))
+        if name == "hermes":
+            existing_names = {str(item.get("name", "")) for item in profiles}
+            for profile in _discover_hermes_native_profiles():
+                if str(profile.get("name", "")) not in existing_names:
+                    profiles.append(profile)
         enriched["local_profiles"] = [_enrich_local_profile(name, profile) for profile in profiles]
         result.append(enriched)
 
@@ -2681,6 +2780,68 @@ async def api_local_profiles_action(req: LocalProfileActionRequest):
             input_summary=f"{req.profile}:{req.action}",
         )
         raise HTTPException(status_code=404, detail=f"profile not found: {req.profile}")
+
+    profile_kind = str(profile.get("profile_kind") or "")
+    if profile_kind == "hermes-native":
+        hermes_profile = str(profile.get("hermes_profile") or "default").strip() or "default"
+        profile_home = _hermes_profile_home(hermes_profile)
+        if not profile_home.exists():
+            cmd = f"hermes profile create {hermes_profile} --clone" if hermes_profile != "default" else "hermes setup"
+            _audit_permission_decision(
+                decision="deny",
+                tool="local-profile-action",
+                agent=req.agent,
+                reason=f"Hermes profile {hermes_profile} does not exist locally",
+                input_summary=f"{req.profile}:{req.action}",
+            )
+            raise HTTPException(status_code=400, detail=f"hermes profile missing: {hermes_profile}. Next step: {cmd}")
+        if not HERMES_BIN.exists():
+            _audit_permission_decision(
+                decision="deny",
+                tool="local-profile-action",
+                agent=req.agent,
+                reason="Hermes CLI is not available",
+                input_summary=f"{req.profile}:{req.action}",
+            )
+            raise HTTPException(status_code=400, detail=f"hermes CLI not found at {HERMES_BIN}")
+
+        cmd = [str(HERMES_BIN), "-p", hermes_profile, "gateway", req.action]
+        proc = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env={**os.environ, "PATH": f"{LOCAL_BIN_DIR}:{os.environ.get('PATH', '')}"},
+            ),
+        )
+        combined = (proc.stdout or "").strip() or (proc.stderr or "").strip()
+        if proc.returncode != 0:
+            _audit_permission_decision(
+                decision="deny",
+                tool="local-profile-action",
+                agent=req.agent,
+                reason=combined or f"gateway {req.action} failed for Hermes profile {hermes_profile}",
+                input_summary=f"{req.profile}:{req.action}",
+            )
+            raise HTTPException(status_code=500, detail=combined or f"gateway {req.action} failed for Hermes profile {hermes_profile}")
+
+        _audit_permission_decision(
+            decision="allow",
+            tool="local-profile-action",
+            agent=req.agent,
+            reason=f"Hermes profile {hermes_profile} gateway {req.action} succeeded",
+            input_summary=f"{req.profile}:{req.action}",
+        )
+        return {
+            "ok": True,
+            "status": "started" if req.action == "start" else "stopped",
+            "profile": req.profile,
+            "profile_kind": "hermes-native",
+            "hermes_profile": hermes_profile,
+            "output": combined,
+        }
 
     if req.action == "stop":
         pid_path = _profile_pid_path(req.agent, req.profile)

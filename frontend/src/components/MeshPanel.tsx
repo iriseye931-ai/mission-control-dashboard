@@ -762,8 +762,13 @@ function HermesTab({
                           }}
                         >
                           <div style={{ fontSize: 8, color: '#cbd5e1', fontFamily: 'monospace' }}>
-                            {profile.name}: {profile.model.split('/').pop() ?? profile.model}
+                            {(profile.display_name ?? profile.name)}: {profile.model.split('/').pop() ?? profile.model}
                           </div>
+                          {(profile.profile_kind || profile.runtime) && (
+                            <div style={{ fontSize: 8, color: '#38bdf8', fontFamily: 'monospace' }}>
+                              kind: {profile.profile_kind === 'hermes-native' ? 'hermes-profile' : (profile.runtime ?? profile.profile_kind)}
+                            </div>
+                          )}
                           {profile.mode && (
                             <div style={{ fontSize: 8, color: profile.mode === 'active' ? '#10b981' : '#f59e0b', fontFamily: 'monospace' }}>
                               mode: {profile.mode}
@@ -774,9 +779,19 @@ function HermesTab({
                               {profile.running ? 'running' : profile.installed ? 'installed' : 'missing'}
                             </span>
                           </div>
+                          {profile.hermes_profile && (
+                            <div style={{ fontSize: 8, color: '#475569', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                              hermes profile: {profile.hermes_profile}
+                            </div>
+                          )}
                           {profile.purpose && (
                             <div style={{ fontSize: 8, color: '#475569', fontFamily: 'monospace', lineHeight: 1.5 }}>
                               {profile.purpose}
+                            </div>
+                          )}
+                          {profile.provider && (
+                            <div style={{ fontSize: 8, color: '#334155', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                              provider: {profile.provider}
                             </div>
                           )}
                           {profile.base_url && (
@@ -784,7 +799,12 @@ function HermesTab({
                               endpoint: {profile.base_url}
                             </div>
                           )}
-                          {profile.mode === 'on-demand' && (
+                          {profile.alias_path && (
+                            <div style={{ fontSize: 8, color: profile.alias_installed ? '#64748b' : '#ef4444', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                              alias: {profile.alias_installed ? profile.alias_path : 'missing'}
+                            </div>
+                          )}
+                          {(profile.mode === 'on-demand' || profile.profile_kind === 'hermes-native') && (
                             <div style={{ display: 'flex', gap: 6, marginTop: 3 }}>
                               <button
                                 type="button"

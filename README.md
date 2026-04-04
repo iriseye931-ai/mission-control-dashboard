@@ -234,6 +234,11 @@ Premium capacity should be reserved for planning, ambiguous debugging, tricky re
 
 Hermes is modeled as one local runner with multiple profiles, not as a pile of always-hot models.
 
+Mission Control now also detects Hermes-native isolated profiles from `~/.hermes/profiles` and surfaces them beside the MLX-backed profile runners. That means the dashboard can distinguish:
+
+- MLX-backed execution profiles for model/runtime selection
+- Hermes-native profiles for isolated config, memory, sessions, and gateway state
+
 - `workhorse`
   `Qwen3.5-35B-A3B-4bit`
   Default local execution profile.

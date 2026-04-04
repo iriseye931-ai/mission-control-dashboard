@@ -431,3 +431,83 @@ class TestLocalProfileActions:
         })
         assert r.status_code == 200
         assert r.json()["status"] in {"not_running", "stopped"}
+
+    def test_finalize_agents_adds_hermes_native_default_profile(self, monkeypatch, tmp_path):
+        import main as main_mod
+
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir(parents=True)
+        (hermes_home / "config.yaml").write_text(
+            "model:\n"
+            "  model: /tmp/qwen\n"
+            "  provider: custom\n"
+            "  base_url: http://127.0.0.1:8081/v1\n"
+        )
+        monkeypatch.setattr(main_mod, "HERMES_HOME", hermes_home)
+        monkeypatch.setattr(main_mod, "HERMES_PROFILES_DIR", hermes_home / "profiles")
+        monkeypatch.setattr(main_mod, "LOCAL_BIN_DIR", tmp_path / ".local" / "bin")
+
+        agents = [{
+            "name": "hermes",
+            "runtime_status": "offline",
+            "status": "offline",
+            "registration_status": "local-only",
+            "orchestration_status": "unknown",
+            "local_profiles": [],
+        }]
+        services = {"hermes_gateway": {"status": "down", "detail": {}}, "aimaestro": {"status": "down"}}
+
+        result = main_mod._finalize_agents(agents, services, {"hermes": None})
+        hermes = result[0]
+        native = next(profile for profile in hermes["local_profiles"] if profile["name"] == "profile:default")
+        assert native["profile_kind"] == "hermes-native"
+        assert native["installed"] is True
+        assert native["hermes_profile"] == "default"
+        assert native["base_url"] == "http://127.0.0.1:8081/v1"
+
+    def test_start_hermes_native_profile_runs_gateway(self, monkeypatch, tmp_path):
+        import main as main_mod
+
+        hermes_home = tmp_path / ".hermes"
+        profile_home = hermes_home / "profiles" / "coder"
+        profile_home.mkdir(parents=True)
+        hermes_bin = tmp_path / "bin" / "hermes"
+        hermes_bin.parent.mkdir(parents=True)
+        hermes_bin.write_text("#!/bin/sh\n")
+        monkeypatch.setattr(main_mod, "HERMES_HOME", hermes_home)
+        monkeypatch.setattr(main_mod, "HERMES_PROFILES_DIR", hermes_home / "profiles")
+        monkeypatch.setattr(main_mod, "HERMES_BIN", hermes_bin)
+        monkeypatch.setattr(main_mod, "PERMISSION_AUDIT_LOG_PATH", tmp_path / "permission_audit.jsonl")
+        monkeypatch.setitem(main_mod._state, "permission_audit_summary", {})
+        monkeypatch.setitem(main_mod._state, "agents", [
+            {
+                "name": "hermes",
+                "local_profiles": [
+                    {
+                        "name": "profile:coder",
+                        "profile_kind": "hermes-native",
+                        "hermes_profile": "coder",
+                        "installed": True,
+                        "running": False,
+                    }
+                ],
+            }
+        ])
+
+        class _Proc:
+            returncode = 0
+            stdout = "gateway started"
+            stderr = ""
+
+        monkeypatch.setattr(main_mod.subprocess, "run", lambda *args, **kwargs: _Proc())
+
+        r = client.post("/api/local-profiles/action", json={
+            "agent": "hermes",
+            "profile": "profile:coder",
+            "action": "start",
+        })
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "started"
+        assert body["profile_kind"] == "hermes-native"
+        assert body["hermes_profile"] == "coder"

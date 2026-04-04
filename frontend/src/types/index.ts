@@ -36,9 +36,11 @@ export interface Agent {
   }
   local_profiles?: {
     name: string
+    display_name?: string
     model: string
     model_path?: string
     base_url?: string
+    provider?: string
     purpose?: string
     mode?: string
     installed?: boolean
@@ -48,6 +50,13 @@ export interface Agent {
     port?: number
     pid?: number | null
     log_path?: string
+    runtime?: string
+    profile_kind?: string
+    hermes_profile?: string
+    profile_home?: string
+    alias_path?: string | null
+    alias_installed?: boolean
+    gateway_status?: string
   }[]
 }
 
