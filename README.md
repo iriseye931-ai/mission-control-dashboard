@@ -8,6 +8,14 @@ Real-time dashboard for multi-agent AI systems — built for the **Claude Code +
 
 ---
 
+## Demo
+
+![Mission Control Demo](assets/dashboard-demo.gif)
+
+- [Download the short MP4 demo clip](assets/dashboard-demo.mp4)
+
+---
+
 ## Visuals
 
 - [Full dashboard capture](assets/dashboard-full.png)
