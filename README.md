@@ -10,9 +10,9 @@ Real-time dashboard for multi-agent AI systems — built for the **Claude Code +
 
 ## Visuals
 
-- full dashboard capture: [assets/dashboard-full.png](/Users/iris/Projects/mission-control-dashboard/assets/dashboard-full.png)
-- focused preview capture: [assets/dashboard-preview.png](/Users/iris/Projects/mission-control-dashboard/assets/dashboard-preview.png)
-- release history: [CHANGELOG.md](/Users/iris/Projects/mission-control-dashboard/CHANGELOG.md)
+- [Full dashboard capture](assets/dashboard-full.png)
+- [Focused preview capture](assets/dashboard-preview.png)
+- [Release history](CHANGELOG.md)
 
 ---
 
