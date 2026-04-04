@@ -220,6 +220,9 @@ function HermesTab({
   const [backgroundBusy, setBackgroundBusy] = useState(false)
   const [backgroundStopBusy, setBackgroundStopBusy] = useState<string | null>(null)
   const [backgroundCleanupBusy, setBackgroundCleanupBusy] = useState<string | null>(null)
+  const [backgroundPollBusy, setBackgroundPollBusy] = useState<string | null>(null)
+  const [backgroundLogBusy, setBackgroundLogBusy] = useState<string | null>(null)
+  const [backgroundLogs, setBackgroundLogs] = useState<Record<string, string>>({})
   const [quickCommandBusy, setQuickCommandBusy] = useState<string | null>(null)
   const [auditEntries, setAuditEntries] = useState<PermissionAuditEntry[]>([])
   const [auditLoading, setAuditLoading] = useState(false)
@@ -441,6 +444,35 @@ function HermesTab({
       setTaskResult(err instanceof Error ? err.message : 'Worktree cleanup failed')
     } finally {
       setBackgroundCleanupBusy(null)
+    }
+  }
+
+  async function pollBackgroundTask(taskId: string) {
+    setBackgroundPollBusy(taskId)
+    try {
+      const res = await fetch(`/api/hermes/background/${taskId}`)
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail ?? `Server error: ${res.status}`)
+      setTaskResult(`background ${data.task.status}: ${data.task.title}`)
+    } catch (err) {
+      setTaskResult(err instanceof Error ? err.message : 'Background poll failed')
+    } finally {
+      setBackgroundPollBusy(null)
+    }
+  }
+
+  async function loadBackgroundLog(taskId: string) {
+    setBackgroundLogBusy(taskId)
+    try {
+      const res = await fetch(`/api/hermes/background/${taskId}/log?lines=40`)
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail ?? `Server error: ${res.status}`)
+      setBackgroundLogs((current) => ({ ...current, [taskId]: data.log || 'no log output yet' }))
+      setTaskResult(`background log loaded: ${taskId}`)
+    } catch (err) {
+      setTaskResult(err instanceof Error ? err.message : 'Background log failed')
+    } finally {
+      setBackgroundLogBusy(null)
     }
   }
 
@@ -831,6 +863,22 @@ function HermesTab({
                           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                             {task.log_path && <span style={{ fontSize: 8, color: '#475569', fontFamily: 'monospace' }}>{task.log_path}</span>}
                             {task.mode === 'worktree' && task.repo_path && <span style={{ fontSize: 8, color: '#334155', fontFamily: 'monospace' }}>{task.repo_path}</span>}
+                            <button
+                              type="button"
+                              onClick={() => pollBackgroundTask(task.id)}
+                              disabled={backgroundPollBusy === task.id}
+                              style={{ fontSize: 8, padding: '3px 6px', borderRadius: 6, border: '1px solid #1e293b', background: '#0a0a0f', color: backgroundPollBusy === task.id ? '#475569' : '#94a3b8', cursor: backgroundPollBusy === task.id ? 'not-allowed' : 'pointer', fontFamily: 'monospace' }}
+                            >
+                              {backgroundPollBusy === task.id ? 'polling' : 'poll'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => loadBackgroundLog(task.id)}
+                              disabled={backgroundLogBusy === task.id}
+                              style={{ fontSize: 8, padding: '3px 6px', borderRadius: 6, border: '1px solid #1e293b', background: '#0a0a0f', color: backgroundLogBusy === task.id ? '#475569' : '#94a3b8', cursor: backgroundLogBusy === task.id ? 'not-allowed' : 'pointer', fontFamily: 'monospace' }}
+                            >
+                              {backgroundLogBusy === task.id ? 'loading' : 'log'}
+                            </button>
                             {task.running && (
                               <button
                                 type="button"
@@ -852,6 +900,11 @@ function HermesTab({
                               </button>
                             )}
                           </div>
+                          {backgroundLogs[task.id] && (
+                            <pre style={{ margin: 0, padding: '8px 9px', borderRadius: 8, border: '1px solid #182033', background: '#090b13', color: '#94a3b8', fontSize: 8, fontFamily: 'monospace', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                              {backgroundLogs[task.id]}
+                            </pre>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -1152,6 +1205,16 @@ function HermesTab({
                             <div style={{ fontSize: 8, color: '#475569', fontFamily: 'monospace', lineHeight: 1.5 }}>
                               provider graph: {profile.provider_overview.smart_routing_enabled ? 'smart' : 'fixed'} · {profile.provider_overview.fallback_count} fallback · {profile.provider_overview.auxiliary_count} aux
                             </div>
+                          )}
+                          {profile.toolset_overview && (
+                            <>
+                              <div style={{ fontSize: 8, color: '#475569', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                                toolsets: {profile.toolset_overview.all_tools ? 'all' : profile.toolset_overview.toolsets.join(', ')}
+                              </div>
+                              <div style={{ fontSize: 8, color: '#334155', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                                tools: {profile.toolset_overview.has_terminal ? 'terminal ' : ''}{profile.toolset_overview.has_memory ? 'memory ' : ''}{profile.toolset_overview.has_delegation ? 'delegation ' : ''}{profile.toolset_overview.has_browser ? 'browser' : ''}
+                              </div>
+                            </>
                           )}
                           {profile.base_url && (
                             <div style={{ fontSize: 8, color: '#334155', fontFamily: 'monospace', lineHeight: 1.5 }}>

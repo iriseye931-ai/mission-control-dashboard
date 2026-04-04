@@ -1363,6 +1363,9 @@ export default function MeshGraph({
               const hermesSmartProfiles = agentKey === 'hermes'
                 ? hermesNativeProfiles.filter((profile) => profile.provider_overview?.smart_routing_enabled).length
                 : null
+              const hermesToolsetProfiles = agentKey === 'hermes'
+                ? hermesNativeProfiles.filter((profile) => (profile.toolset_overview?.toolset_count ?? 0) > 0).length
+                : null
 
               return (
                 <div
@@ -1453,6 +1456,14 @@ export default function MeshGraph({
                         <span style={{ fontSize: 9, color: 'rgba(150,200,220,0.44)', letterSpacing:'0.14em', textTransform:'uppercase' }}>Providers</span>
                         <span style={{ fontSize: 12, color: isFocused ? '#effcff' : '#c8eaf8', textAlign: 'right', minWidth: 0, lineHeight: 1.4, whiteSpace: 'normal', wordBreak: 'break-word' }}>
                           {hermesFallbackProfiles ?? 0} fallback · {hermesSmartProfiles ?? 0} smart
+                        </span>
+                      </div>
+                    )}
+                    {agentKey === 'hermes' && hermesToolsetProfiles != null && hermesToolsetProfiles > 0 && (
+                      <div style={{ display:'grid', gridTemplateColumns: '72px minmax(0, 1fr)', gap: 10, alignItems: 'start' }}>
+                        <span style={{ fontSize: 9, color: 'rgba(150,200,220,0.44)', letterSpacing:'0.14em', textTransform:'uppercase' }}>Toolsets</span>
+                        <span style={{ fontSize: 12, color: isFocused ? '#effcff' : '#c8eaf8', textAlign: 'right', minWidth: 0, lineHeight: 1.4, whiteSpace: 'normal', wordBreak: 'break-word' }}>
+                          {hermesToolsetProfiles}/{hermesNativeProfiles.length} mapped
                         </span>
                       </div>
                     )}

@@ -105,6 +105,15 @@ export interface Agent {
       unique_endpoint_count: number
       unique_model_count: number
     }
+    toolset_overview?: {
+      toolsets: string[]
+      toolset_count: number
+      all_tools: boolean
+      has_browser: boolean
+      has_terminal: boolean
+      has_memory: boolean
+      has_delegation: boolean
+    }
     session_overview?: {
       profile: string
       session_count: number

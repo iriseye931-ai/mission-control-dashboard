@@ -29,6 +29,7 @@ from main import (
     _fetch_hermes_provider_overview,
     _fetch_hermes_profile_session_overview,
     _fetch_hermes_sessions_overview,
+    _fetch_hermes_toolset_overview,
     _refresh_background_task_state,
     _read_hermes_quick_commands,
     _recommend_route,
@@ -497,6 +498,51 @@ class TestHermesSessions:
         assert overview["cheap_model"]["model"] == "/models/cheap"
         assert overview["auxiliary_count"] == 1
         assert overview["delegation"]["model"] == "/models/main"
+
+    def test_toolset_overview_reads_profile_toolsets(self, tmp_path):
+        profile_home = tmp_path / "mesh-sidecar"
+        profile_home.mkdir(parents=True)
+        (profile_home / "config.yaml").write_text(
+            "toolsets:\n"
+            "  - terminal\n"
+            "  - memory\n"
+            "  - delegation\n"
+        )
+
+        overview = _fetch_hermes_toolset_overview(profile_home)
+        assert overview["toolset_count"] == 3
+        assert overview["all_tools"] is False
+        assert overview["has_terminal"] is True
+        assert overview["has_memory"] is True
+        assert overview["has_delegation"] is True
+
+    def test_background_log_endpoint_returns_tail(self, tmp_path, monkeypatch):
+        import main as main_mod
+
+        log_path = tmp_path / "task.log"
+        log_path.write_text("line 1\nline 2\nline 3\n")
+        monkeypatch.setattr(
+            main_mod,
+            "_fetch_hermes_background_tasks",
+            lambda: [{"id": "bg_1", "log_path": str(log_path), "status": "finished", "running": False}],
+        )
+
+        response = client.get("/api/hermes/background/bg_1/log?lines=2")
+        assert response.status_code == 200
+        assert response.json()["log"] == "line 2\nline 3"
+
+    def test_background_poll_endpoint_returns_task(self, monkeypatch):
+        import main as main_mod
+
+        monkeypatch.setattr(
+            main_mod,
+            "_fetch_hermes_background_tasks",
+            lambda: [{"id": "bg_1", "status": "running", "running": True}],
+        )
+
+        response = client.get("/api/hermes/background/bg_1")
+        assert response.status_code == 200
+        assert response.json()["task"]["status"] == "running"
 
 
 class TestHermesBackgroundTasks:

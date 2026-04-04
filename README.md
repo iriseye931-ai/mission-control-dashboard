@@ -244,6 +244,7 @@ Mission Control now also detects Hermes-native isolated profiles from `~/.hermes
 - Hermes worktree lifecycle controls for launch, stop, branch/path tracking, and cleanup of stale isolated workers
 - Hermes checkpoint awareness for rollback readiness, snapshot depth, and per-profile rollback guidance before destructive changes
 - Hermes provider graph visibility for primary model, fallback providers, smart routing, auxiliary providers, and delegation paths per profile
+- Hermes toolset visibility and richer background-task controls for poll/log inspection directly from Mission Control
 
 - `workhorse`
   `Qwen3.5-35B-A3B-4bit`

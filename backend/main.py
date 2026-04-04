@@ -566,6 +566,7 @@ def _enrich_local_profile(agent_name: str, profile: dict[str, Any]) -> dict[str,
         enriched["quick_commands"] = _read_hermes_quick_commands(profile_home)
         enriched["checkpoint_overview"] = _fetch_hermes_checkpoint_overview(profile_home, hermes_profile)
         enriched["provider_overview"] = _fetch_hermes_provider_overview(profile_home)
+        enriched["toolset_overview"] = _fetch_hermes_toolset_overview(profile_home)
         return enriched
     model_path = _resolve_profile_model(profile)
     pid_path = _profile_pid_path(agent_name, str(profile.get("name", "")))
@@ -761,6 +762,22 @@ def _fetch_hermes_provider_overview(profile_home: Path) -> dict[str, Any]:
         "delegation": delegation,
         "unique_endpoint_count": len(endpoints),
         "unique_model_count": len(models),
+    }
+
+
+def _fetch_hermes_toolset_overview(profile_home: Path) -> dict[str, Any]:
+    config = _read_hermes_profile_config(profile_home)
+    toolsets = config.get("toolsets")
+    toolsets_list = [str(item).strip() for item in toolsets] if isinstance(toolsets, list) else []
+    toolsets_list = [item for item in toolsets_list if item]
+    return {
+        "toolsets": toolsets_list,
+        "toolset_count": len(toolsets_list),
+        "all_tools": "all" in toolsets_list,
+        "has_browser": any(item in {"all", "browser", "web"} for item in toolsets_list),
+        "has_terminal": any(item in {"all", "terminal", "file"} for item in toolsets_list),
+        "has_memory": any(item in {"all", "memory", "session_search"} for item in toolsets_list),
+        "has_delegation": any(item in {"all", "delegation", "code_execution"} for item in toolsets_list),
     }
 
 
@@ -970,6 +987,20 @@ def _fetch_hermes_background_tasks() -> list[dict[str, Any]]:
             pass
     tasks.sort(key=lambda item: item.get("started_at", ""), reverse=True)
     return tasks
+
+
+def _tail_text(path_str: str | None, lines: int = 40) -> str:
+    if not path_str:
+        return ""
+    try:
+        path = Path(path_str)
+        if not path.exists():
+            return ""
+        text = path.read_text(errors="replace")
+        rows = text.splitlines()
+        return "\n".join(rows[-lines:])
+    except Exception:
+        return ""
 
 
 def _build_hermes_background_command(profile_name: str, prompt: str, use_worktree: bool = False) -> list[str]:
@@ -3006,6 +3037,28 @@ async def api_hermes_background_cleanup(task_id: str):
     _state["hermes_status"] = await asyncio.get_event_loop().run_in_executor(None, _fetch_hermes_status)
     await _broadcast_status()
     return {"ok": True, "task": task}
+
+
+@app.get("/api/hermes/background/{task_id}")
+async def api_hermes_background_poll(task_id: str):
+    task = next((item for item in _fetch_hermes_background_tasks() if item.get("id") == task_id), None)
+    if not task:
+        raise HTTPException(status_code=404, detail="background task not found")
+    return {"ok": True, "task": task}
+
+
+@app.get("/api/hermes/background/{task_id}/log")
+async def api_hermes_background_log(task_id: str, lines: int = 40):
+    task = next((item for item in _fetch_hermes_background_tasks() if item.get("id") == task_id), None)
+    if not task:
+        raise HTTPException(status_code=404, detail="background task not found")
+    capped = max(1, min(lines, 200))
+    return {
+        "ok": True,
+        "task_id": task_id,
+        "lines": capped,
+        "log": _tail_text(task.get("log_path"), capped),
+    }
 
 
 @app.post("/api/hermes/quick-command")
