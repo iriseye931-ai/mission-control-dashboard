@@ -564,6 +564,7 @@ def _enrich_local_profile(agent_name: str, profile: dict[str, Any]) -> dict[str,
         enriched["display_name"] = str(profile.get("display_name") or hermes_profile)
         enriched["session_overview"] = _fetch_hermes_profile_session_overview(profile_home, hermes_profile)
         enriched["quick_commands"] = _read_hermes_quick_commands(profile_home)
+        enriched["checkpoint_overview"] = _fetch_hermes_checkpoint_overview(profile_home, hermes_profile)
         return enriched
     model_path = _resolve_profile_model(profile)
     pid_path = _profile_pid_path(agent_name, str(profile.get("name", "")))
@@ -651,6 +652,51 @@ def _read_hermes_quick_commands(profile_home: Path) -> list[dict[str, Any]]:
             "command": str(spec.get("command") or "").strip() or None,
         })
     return items
+
+
+def _fetch_hermes_checkpoint_overview(profile_home: Path, profile_name: str) -> dict[str, Any]:
+    config = _read_hermes_profile_config(profile_home)
+    checkpoint_cfg = config.get("checkpoints")
+    checkpoint_cfg = checkpoint_cfg if isinstance(checkpoint_cfg, dict) else {}
+    snapshot_root = HERMES_HOME / "checkpoints"
+    snapshot_dirs: list[Path] = []
+    try:
+        if snapshot_root.exists():
+            snapshot_dirs = sorted(
+                [path for path in snapshot_root.iterdir() if path.is_dir()],
+                key=lambda item: item.stat().st_mtime,
+                reverse=True,
+            )
+    except Exception:
+        snapshot_dirs = []
+
+    latest_snapshot_at = None
+    if snapshot_dirs:
+        try:
+            latest_snapshot_at = _iso_from_timestamp(snapshot_dirs[0].stat().st_mtime)
+        except Exception:
+            latest_snapshot_at = None
+
+    max_snapshots = checkpoint_cfg.get("max_snapshots")
+    if max_snapshots is not None:
+        try:
+            max_snapshots = int(max_snapshots)
+        except Exception:
+            max_snapshots = None
+
+    resume_command = f"hermes -p {profile_name} -c" if profile_name != "default" else "hermes -c"
+    enabled = bool(checkpoint_cfg.get("enabled"))
+    return {
+        "enabled": enabled,
+        "max_snapshots": max_snapshots,
+        "snapshot_root": str(snapshot_root),
+        "snapshot_count": len(snapshot_dirs),
+        "latest_snapshot_at": latest_snapshot_at,
+        "git_available": shutil.which("git") is not None,
+        "rollback_ready": enabled and bool(snapshot_dirs),
+        "rollback_diff_hint": f"{resume_command} then run /rollback diff",
+        "rollback_hint": f"{resume_command} then run /rollback",
+    }
 
 
 def _resolve_repo_root(repo_path: str | None) -> Path | None:

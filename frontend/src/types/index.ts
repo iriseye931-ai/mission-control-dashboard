@@ -62,6 +62,17 @@ export interface Agent {
       type: string
       command?: string | null
     }[]
+    checkpoint_overview?: {
+      enabled: boolean
+      max_snapshots?: number | null
+      snapshot_root?: string
+      snapshot_count: number
+      latest_snapshot_at?: string | null
+      git_available?: boolean
+      rollback_ready: boolean
+      rollback_diff_hint?: string
+      rollback_hint?: string
+    }
     session_overview?: {
       profile: string
       session_count: number

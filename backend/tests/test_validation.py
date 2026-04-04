@@ -25,6 +25,7 @@ from main import (
     _build_hermes_background_command,
     _cleanup_hermes_worktree,
     _finalize_agents,
+    _fetch_hermes_checkpoint_overview,
     _fetch_hermes_profile_session_overview,
     _fetch_hermes_sessions_overview,
     _refresh_background_task_state,
@@ -415,6 +416,49 @@ class TestHermesSessions:
         assert overview["profile_count"] == 2
         assert overview["active_profiles"] == 2
         assert overview["search_ready"] is True
+
+    def test_checkpoint_overview_reads_profile_settings(self, tmp_path, monkeypatch):
+        import main as main_mod
+
+        hermes_home = tmp_path / ".hermes"
+        profile_home = hermes_home / "profiles" / "mesh-sidecar"
+        checkpoint_root = hermes_home / "checkpoints"
+        profile_home.mkdir(parents=True)
+        checkpoint_root.mkdir(parents=True)
+        (profile_home / "config.yaml").write_text(
+            "checkpoints:\n"
+            "  enabled: true\n"
+            "  max_snapshots: 25\n"
+        )
+        shadow_repo = checkpoint_root / "abcdef1234567890"
+        shadow_repo.mkdir()
+
+        monkeypatch.setattr(main_mod, "HERMES_HOME", hermes_home)
+
+        overview = _fetch_hermes_checkpoint_overview(profile_home, "mesh-sidecar")
+        assert overview["enabled"] is True
+        assert overview["max_snapshots"] == 25
+        assert overview["snapshot_count"] == 1
+        assert overview["rollback_ready"] is True
+        assert "/rollback diff" in overview["rollback_diff_hint"]
+
+    def test_checkpoint_overview_handles_disabled_checkpoints(self, tmp_path, monkeypatch):
+        import main as main_mod
+
+        hermes_home = tmp_path / ".hermes"
+        profile_home = hermes_home
+        profile_home.mkdir(parents=True)
+        (profile_home / "config.yaml").write_text(
+            "checkpoints:\n"
+            "  enabled: false\n"
+        )
+
+        monkeypatch.setattr(main_mod, "HERMES_HOME", hermes_home)
+
+        overview = _fetch_hermes_checkpoint_overview(profile_home, "default")
+        assert overview["enabled"] is False
+        assert overview["snapshot_count"] == 0
+        assert overview["rollback_ready"] is False
 
 
 class TestHermesBackgroundTasks:

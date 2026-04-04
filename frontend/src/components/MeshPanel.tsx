@@ -286,6 +286,10 @@ function HermesTab({
   const backgroundTasks = status?.background_tasks ?? []
   const activeProfileMeta = hermesNativeProfiles.find((profile) => (profile.hermes_profile ?? profile.display_name ?? profile.name) === backgroundProfile) ?? hermesNativeProfiles[0]
   const quickCommands = activeProfileMeta?.quick_commands ?? []
+  const hermesProfileMeta = Object.fromEntries(
+    hermesNativeProfiles.map((profile) => [profile.hermes_profile ?? profile.display_name ?? profile.name, profile]),
+  )
+  const checkpointReadyProfiles = hermesNativeProfiles.filter((profile) => profile.checkpoint_overview?.rollback_ready).length
   const focusedAgent = focus?.type === 'agent'
     ? agents.find((agent) => (agent.name ?? '').toLowerCase().replace(/\s+/g, '-') === focus.key)
     : null
@@ -662,6 +666,36 @@ function HermesTab({
                     ))}
                   </div>
                 )}
+                {hermesNativeProfiles.length > 0 && (
+                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid rgba(15,23,42,0.45)' }}>
+                    <div style={{ fontSize: 8, color: '#475569', fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: 8 }}>
+                      checkpoints
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8 }}>
+                      <MiniStat label="ready" value={`${checkpointReadyProfiles}/${hermesNativeProfiles.length}`} tone={checkpointReadyProfiles > 0 ? '#10b981' : '#94a3b8'} />
+                      <MiniStat label="snapshots" value={activeProfileMeta?.checkpoint_overview?.snapshot_count ?? 0} tone="#67e8f9" />
+                      <MiniStat label="max" value={activeProfileMeta?.checkpoint_overview?.max_snapshots ?? '—'} tone="#a78bfa" />
+                    </div>
+                    {activeProfileMeta?.checkpoint_overview && (
+                      <div style={{ marginTop: 10, display: 'grid', gap: 6 }}>
+                        <div style={{ fontSize: 9, color: '#cbd5e1', fontFamily: 'monospace' }}>
+                          {(activeProfileMeta.display_name ?? activeProfileMeta.hermes_profile ?? activeProfileMeta.name)} · {activeProfileMeta.checkpoint_overview.rollback_ready ? 'rollback ready' : activeProfileMeta.checkpoint_overview.enabled ? 'checkpointing enabled' : 'checkpointing off'}
+                        </div>
+                        {activeProfileMeta.checkpoint_overview.latest_snapshot_at && (
+                          <div style={{ fontSize: 8, color: '#64748b', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                            latest snapshot: {new Date(activeProfileMeta.checkpoint_overview.latest_snapshot_at).toLocaleString()}
+                          </div>
+                        )}
+                        <div style={{ fontSize: 8, color: '#334155', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                          {activeProfileMeta.checkpoint_overview.rollback_diff_hint}
+                        </div>
+                        <div style={{ fontSize: 8, color: '#334155', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                          {activeProfileMeta.checkpoint_overview.rollback_hint}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid rgba(15,23,42,0.45)' }}>
                   <div style={{ fontSize: 8, color: '#475569', fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: 8 }}>
                     background work
@@ -732,6 +766,13 @@ function HermesTab({
                           {task.worktree_branch && (
                             <div style={{ fontSize: 8, color: '#475569', fontFamily: 'monospace', lineHeight: 1.5 }}>
                               {task.worktree_branch}
+                            </div>
+                          )}
+                          {task.mode === 'worktree' && hermesProfileMeta[task.profile]?.checkpoint_overview && (
+                            <div style={{ fontSize: 8, color: hermesProfileMeta[task.profile]?.checkpoint_overview?.rollback_ready ? '#94a3b8' : '#475569', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                              {hermesProfileMeta[task.profile]?.checkpoint_overview?.rollback_ready
+                                ? `${hermesProfileMeta[task.profile]?.checkpoint_overview?.rollback_diff_hint} inside the worktree session`
+                                : 'worktree rollback not ready yet'}
                             </div>
                           )}
                           <div style={{ fontSize: 8, color: '#334155', fontFamily: 'monospace', lineHeight: 1.5 }}>
@@ -1066,6 +1107,16 @@ function HermesTab({
                             <div style={{ fontSize: 8, color: profile.alias_installed ? '#64748b' : '#ef4444', fontFamily: 'monospace', lineHeight: 1.5 }}>
                               alias: {profile.alias_installed ? profile.alias_path : 'missing'}
                             </div>
+                          )}
+                          {profile.checkpoint_overview && (
+                            <>
+                              <div style={{ fontSize: 8, color: profile.checkpoint_overview.rollback_ready ? '#10b981' : '#475569', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                                checkpoints: {profile.checkpoint_overview.enabled ? `${profile.checkpoint_overview.snapshot_count} ready` : 'disabled'}
+                              </div>
+                              <div style={{ fontSize: 8, color: '#334155', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                                {profile.checkpoint_overview.rollback_diff_hint}
+                              </div>
+                            </>
                           )}
                           {(profile.mode === 'on-demand' || profile.profile_kind === 'hermes-native') && (
                             <div style={{ display: 'flex', gap: 6, marginTop: 3 }}>
