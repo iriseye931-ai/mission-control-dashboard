@@ -1239,6 +1239,11 @@ export default function MeshGraph({
               const statusLabel = isUp ? 'ONLINE' : isDegraded ? 'DEGRADED' : statusRaw ? statusRaw.toUpperCase() : 'OFFLINE'
               const modelLabel = agent?.model?.split('/').pop()?.slice(0, 18) ?? '—'
               const taskSummary = agent?.task?.slice(0, 72) ?? null
+              const hermesNativeProfiles = (agent?.local_profiles ?? []).filter((profile) => profile.profile_kind === 'hermes-native')
+              const hermesRunningProfiles = hermesNativeProfiles.filter((profile) => profile.running).length
+              const hermesProfileSummary = hermesNativeProfiles.length > 0
+                ? `${hermesRunningProfiles}/${hermesNativeProfiles.length}`
+                : null
 
               return (
                 <div
@@ -1290,6 +1295,14 @@ export default function MeshGraph({
                       <div style={{ display:'grid', gridTemplateColumns: '72px minmax(0, 1fr)', gap: 10, alignItems: 'start' }}>
                         <span style={{ fontSize: 9, color: 'rgba(150,200,220,0.44)', letterSpacing:'0.14em', textTransform:'uppercase' }}>Runtime</span>
                         <span style={{ fontSize: 12, color: isFocused ? '#effcff' : '#c8eaf8', textAlign: 'right', minWidth: 0, lineHeight: 1.4, whiteSpace: 'normal', wordBreak: 'break-word' }}>{agent.runtime_status}</span>
+                      </div>
+                    )}
+                    {agentKey === 'hermes' && hermesProfileSummary && (
+                      <div style={{ display:'grid', gridTemplateColumns: '72px minmax(0, 1fr)', gap: 10, alignItems: 'start' }}>
+                        <span style={{ fontSize: 9, color: 'rgba(150,200,220,0.44)', letterSpacing:'0.14em', textTransform:'uppercase' }}>Profiles</span>
+                        <span style={{ fontSize: 12, color: isFocused ? '#effcff' : '#c8eaf8', textAlign: 'right', minWidth: 0, lineHeight: 1.4, whiteSpace: 'normal', wordBreak: 'break-word' }}>
+                          {hermesProfileSummary} active
+                        </span>
                       </div>
                     )}
                     {taskSummary && (
