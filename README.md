@@ -83,6 +83,41 @@ npm run dev
 
 The backend polls your local services and broadcasts state over WebSocket. Push events directly from any agent via the REST API.
 
+### Codex + Claude Inbox
+
+Mission Control now includes a shared local inbox so two terminals can coordinate through one file-backed channel:
+
+- shared inbox file:
+  `~/.mesh/agent_inbox.jsonl`
+- terminal CLI:
+  [`backend/agent_inbox.py`](/Users/iris/Projects/mission-control-dashboard/backend/agent_inbox.py)
+- convenience wrappers:
+  [`backend/codex-listen.sh`](/Users/iris/Projects/mission-control-dashboard/backend/codex-listen.sh)
+  [`backend/claude-listen.sh`](/Users/iris/Projects/mission-control-dashboard/backend/claude-listen.sh)
+  [`backend/codex-read.sh`](/Users/iris/Projects/mission-control-dashboard/backend/codex-read.sh)
+  [`backend/claude-read.sh`](/Users/iris/Projects/mission-control-dashboard/backend/claude-read.sh)
+  [`backend/codex-send.sh`](/Users/iris/Projects/mission-control-dashboard/backend/codex-send.sh)
+  [`backend/claude-send.sh`](/Users/iris/Projects/mission-control-dashboard/backend/claude-send.sh)
+
+From the `backend/` directory:
+
+```bash
+./codex-listen.sh
+./claude-listen.sh
+
+./codex-read.sh
+./claude-read.sh
+
+./codex-send.sh --summary "Need a realism pass" --details "Own MeshGraph.tsx"
+./claude-send.sh --summary "Sphere pass complete" --files "frontend/src/components/MeshGraph.tsx"
+```
+
+Recommended split:
+
+- Claude owns `frontend/src/components/MeshGraph.tsx`
+- Codex owns integration, HUD/layout, backend/tooling, and final verification
+- both agents send bounded handoffs through the inbox instead of copying text manually
+
 **From Python (any agent):**
 ```python
 import httpx

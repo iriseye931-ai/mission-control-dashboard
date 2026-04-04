@@ -24,7 +24,7 @@ load_dotenv(Path(__file__).parent / ".env")
 
 import httpx
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator
@@ -55,6 +55,7 @@ AIMAESTRO_AGENTS_DIR = Path.home() / ".aimaestro" / "agents"
 AIMAESTRO_REGISTRY_PATH = AIMAESTRO_AGENTS_DIR / "registry.json"
 AVAILABILITY_OVERRIDES_PATH = Path.home() / ".mesh" / "availability_overrides.json"
 PERMISSION_AUDIT_LOG_PATH = Path.home() / ".mesh" / "permission_audit.jsonl"
+AGENT_INBOX_PATH = Path.home() / ".mesh" / "agent_inbox.jsonl"
 MESH_PROFILE_RUNTIME_DIR = Path.home() / ".mesh" / "mlx-profiles"
 MLX_VENV_BIN = Path.home() / ".mlx" / "venv" / "bin"
 MLX_SERVER_BIN = MLX_VENV_BIN / "mlx_lm.server"
@@ -109,6 +110,7 @@ def _init_sessions_db():
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     _init_sessions_db()
+    _refresh_agent_messages()
     asyncio.create_task(_poll_loop())
     asyncio.create_task(_openviking_watchdog())
     asyncio.create_task(_generate_brief_on_startup())
@@ -143,6 +145,8 @@ _state: dict[str, Any] = {
     "agents": [],
     "cron_jobs": [],
     "memories": [],
+    "memory_summary": {},
+    "memory_events": [],
     "llm_models": [],
     "llm_active": None,   # which LLM backend is serving: "mlx" | None
     "memory_monitor_log": [],  # last N lines from memory monitor log
@@ -156,6 +160,7 @@ _state: dict[str, Any] = {
     "service_history": {},
     "routing_summary": {},
     "permission_audit_summary": {},
+    "agent_messages": [],
 }
 
 _trending_cache_time: float = 0.0
@@ -256,7 +261,11 @@ def _classify_task(text: str) -> tuple[str, str]:
     return "routine", "Default local execution"
 
 
-def _build_routing_summary(agents: list[dict[str, Any]]) -> dict[str, Any]:
+def _build_routing_summary(
+    agents: list[dict[str, Any]],
+    services: dict[str, Any] | None = None,
+    memory_summary: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     premium_pool = [a for a in agents if a.get("routing_group") == "premium-pool"]
     available_premium = [
         a for a in premium_pool
@@ -264,6 +273,28 @@ def _build_routing_summary(agents: list[dict[str, Any]]) -> dict[str, Any]:
     ]
     local_default = next((a for a in agents if a.get("routing_group") == "local-default"), None)
     specialized = [a for a in agents if a.get("routing_group") == "specialized"]
+    services = services or {}
+    memory_summary = memory_summary or {}
+    memory_status = memory_summary.get("status") or services.get("memory_mcp", {}).get("status", "unknown")
+    memory_ready = memory_status == "up"
+    warnings: list[str] = []
+    primary_cause = memory_summary.get("primary_cause") or {}
+    memory_mode = primary_cause.get("kind", "healthy")
+    if not memory_ready:
+        if memory_mode == "substrate":
+            warnings.append("Memory substrate is degraded; recall-heavy tasks may need manual verification.")
+        elif memory_mode == "gateway":
+            warnings.append("OpenViking gateway is down; memory transport and orchestration visibility are limited.")
+        elif memory_mode == "pressure":
+            warnings.append("Host memory pressure is degrading recall reliability.")
+        elif memory_mode == "stale":
+            warnings.append("Memory context is stale; recent state may be missing.")
+        else:
+            warnings.append(primary_cause.get("summary") or "Memory path is degraded.")
+
+    routine_agent = (local_default or {}).get("name") or "hermes"
+    specialized_agent = specialized[0].get("name") if specialized else routine_agent
+    premium_agent = available_premium[0].get("name") if available_premium else (premium_pool[0].get("name") if premium_pool else "atlas")
     return {
         "policy": "local-first",
         "premium_pool": [a.get("name") for a in premium_pool],
@@ -272,10 +303,15 @@ def _build_routing_summary(agents: list[dict[str, Any]]) -> dict[str, Any]:
         "premium_total_count": len(premium_pool),
         "local_default": (local_default or {}).get("name"),
         "specialized_agents": [a.get("name") for a in specialized],
+        "memory_status": memory_status,
+        "memory_ready": memory_ready,
+        "memory_mode": memory_mode,
+        "warnings": warnings,
         "guidance": {
-            "routine": (local_default or {}).get("name") or "hermes",
-            "specialized": specialized[0].get("name") if specialized else ((local_default or {}).get("name") or "hermes"),
-            "premium": available_premium[0].get("name") if available_premium else (premium_pool[0].get("name") if premium_pool else "atlas"),
+            "routine": routine_agent,
+            "specialized": specialized_agent,
+            "premium": premium_agent,
+            "memory_heavy": routine_agent if memory_ready or memory_mode == "pressure" else premium_agent,
         },
     }
 
@@ -349,6 +385,55 @@ def _append_permission_audit(entry: dict[str, Any]) -> dict[str, Any]:
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record) + "\n")
     _refresh_permission_audit_summary()
+    return record
+
+
+def _read_agent_messages(limit: int | None = 100) -> list[dict[str, Any]]:
+    path = AGENT_INBOX_PATH
+    if not path.exists():
+        return []
+
+    messages: list[dict[str, Any]] = []
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    message = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(message, dict):
+                    messages.append(message)
+    except Exception:
+        return []
+
+    return messages[-limit:] if limit is not None else messages
+
+
+def _refresh_agent_messages(limit: int = 100) -> list[dict[str, Any]]:
+    messages = _read_agent_messages(limit=limit)
+    _state["agent_messages"] = messages
+    return messages
+
+
+def _append_agent_message(message: dict[str, Any]) -> dict[str, Any]:
+    AGENT_INBOX_PATH.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "id": message.get("id") or f"msg-{datetime.now(timezone.utc).timestamp():.6f}",
+        "timestamp": message.get("timestamp") or _now_iso(),
+        "from": str(message.get("from") or "").strip(),
+        "to": str(message.get("to") or "").strip(),
+        "role": str(message.get("role") or "handoff").strip(),
+        "task": str(message.get("task") or "").strip(),
+        "summary": str(message.get("summary") or "").strip(),
+        "details": str(message.get("details") or "").strip(),
+        "files": message.get("files") or [],
+    }
+    with AGENT_INBOX_PATH.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record) + "\n")
+    _refresh_agent_messages()
     return record
 
 
@@ -486,7 +571,9 @@ def _recommend_local_profile(task: str, agents: list[dict[str, Any]], recommende
 
 def _recommend_route(task: str, agents: list[dict[str, Any]]) -> dict[str, Any]:
     task_class, reason = _classify_task(task)
-    summary = _build_routing_summary(agents)
+    summary = _build_routing_summary(agents, _state.get("services"), _state.get("memory_summary"))
+    memory_heavy = any(token in (task or "").lower() for token in {"memory", "recall", "rag", "context", "history", "session"})
+    memory_warning = next(iter(summary.get("warnings") or []), None) if not summary.get("memory_ready", True) and memory_heavy else None
     if task_class == "premium":
         primary = summary["guidance"]["premium"]
         premium_pool = summary.get("premium_pool", [])
@@ -499,6 +586,7 @@ def _recommend_route(task: str, agents: list[dict[str, Any]]) -> dict[str, Any]:
             "recommended_profile": None,
             "profile_reason": None,
             "reason": reason,
+            "memory_warning": memory_warning,
         }
     if task_class == "specialized":
         specialized = summary.get("specialized_agents", [])
@@ -512,16 +600,19 @@ def _recommend_route(task: str, agents: list[dict[str, Any]]) -> dict[str, Any]:
             "recommended_profile": None,
             "profile_reason": None,
             "reason": reason,
+            "memory_warning": memory_warning,
         }
     profile = _recommend_local_profile(task, agents, summary["guidance"]["routine"])
+    recommended_agent = summary["guidance"]["memory_heavy"] if memory_heavy else summary["guidance"]["routine"]
     return {
         "task_class": task_class,
-        "recommended_agent": summary["guidance"]["routine"],
+        "recommended_agent": recommended_agent,
         "model_tier": "local-default",
-        "fallback_agent": None,
+        "fallback_agent": summary["guidance"]["premium"] if memory_heavy and not summary.get("memory_ready", True) else None,
         "recommended_profile": (profile or {}).get("profile"),
         "profile_reason": (profile or {}).get("reason"),
         "reason": reason,
+        "memory_warning": memory_warning,
     }
 
 
@@ -1049,12 +1140,25 @@ def _read_cron_jobs() -> list[dict[str, Any]]:
 
 
 def _fetch_system_metrics() -> dict[str, Any]:
-    """Collect CPU, RAM, and MLX model memory usage."""
-    total_ram = psutil.virtual_memory().total
-    used_ram = psutil.virtual_memory().used
-    ram_pct = psutil.virtual_memory().percent
+    """Collect CPU, RAM, disk, uptime, and MLX model memory usage."""
+    mem = psutil.virtual_memory()
+    total_ram = mem.total
+    used_ram = mem.used
+    ram_pct = mem.percent
 
     cpu_pct = psutil.cpu_percent(interval=None)
+
+    # Disk (root partition)
+    disk = psutil.disk_usage('/')
+    disk_pct = round(disk.percent, 1)
+    disk_used_gb = round(disk.used / 1e9, 1)
+    disk_total_gb = round(disk.total / 1e9, 1)
+
+    # System uptime
+    uptime_seconds = int(datetime.now(timezone.utc).timestamp() - psutil.boot_time())
+
+    # 1-minute load average (POSIX; graceful fallback on Windows)
+    load_1m = round(psutil.getloadavg()[0], 2) if hasattr(psutil, 'getloadavg') else 0.0
 
     # MLX process memory
     mlx_ram_bytes = 0
@@ -1079,7 +1183,12 @@ def _fetch_system_metrics() -> dict[str, Any]:
         "mlx_ram_pct": mlx_ram_pct,
         "mlx_ram_gb": round(mlx_ram_bytes / 1e9, 1),
         "mlx_pid": mlx_pid,
-        "local_pct": round(mlx_ram_pct, 1),  # % of RAM used by local LLM
+        "local_pct": round(mlx_ram_pct, 1),
+        "disk_pct": disk_pct,
+        "disk_used_gb": disk_used_gb,
+        "disk_total_gb": disk_total_gb,
+        "uptime_seconds": uptime_seconds,
+        "load_1m": load_1m,
     }
 
 
@@ -1119,6 +1228,167 @@ async def _fetch_memories(client: httpx.AsyncClient) -> list[dict[str, Any]]:
         return memories
     except Exception:
         return []
+
+
+def _parse_log_timestamp(line: str) -> datetime | None:
+    match = re.search(r"(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})", line)
+    if not match:
+        return None
+    raw = match.group(1).replace(" ", "T")
+    try:
+        return datetime.fromisoformat(raw).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _extract_memory_events(memory_monitor_log: list[str], limit: int = 12) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for line in reversed(memory_monitor_log or []):
+        lowered = line.lower()
+        event_type = None
+        status = "info"
+        source = "memory-monitor"
+        latency_ms = None
+        resource = {}
+
+        latency_match = re.search(r"(\d+(?:\.\d+)?)\s*ms\b", lowered)
+        if latency_match:
+            latency_ms = int(float(latency_match.group(1)))
+
+        free_match = re.search(r"free=(\d+)\s*mb", lowered)
+        used_match = re.search(r"used=(\d+)\s*gb", lowered)
+        if free_match:
+            resource["free_mb"] = int(free_match.group(1))
+        if used_match:
+            resource["used_gb"] = int(used_match.group(1))
+
+        if any(token in lowered for token in ("error", "exception", "fail", "timeout")):
+            event_type = "recall_failed" if "recall" in lowered else "write_failed" if any(token in lowered for token in ("write", "store", "ingest", "sync")) else "memory_error"
+            status = "error"
+        elif "low memory" in lowered:
+            event_type = "memory_pressure"
+            status = "warn"
+        elif any(token in lowered for token in ("recalled", "recall ok", "recall complete", "recall success")):
+            event_type = "recall_ok"
+            status = "ok"
+        elif any(token in lowered for token in ("stored", "write ok", "ingest complete", "write success", "synced")):
+            event_type = "write_ok"
+            status = "ok"
+        elif "consolidat" in lowered or "compact" in lowered:
+            event_type = "consolidation"
+            status = "ok" if "error" not in lowered and "fail" not in lowered else "error"
+
+        if not event_type:
+            continue
+
+        ts = _parse_log_timestamp(line)
+        summary = re.sub(r"\s+", " ", line).strip()
+        if len(summary) > 160:
+            summary = f"{summary[:157]}..."
+        events.append(
+            {
+                "ts": ts.isoformat() if ts else None,
+                "type": event_type,
+                "status": status,
+                "source": source,
+                "latency_ms": latency_ms,
+                "resource": resource or None,
+                "summary": summary,
+            }
+        )
+        if len(events) >= limit:
+            break
+    return events
+
+
+def _build_memory_summary(
+    memories: list[dict[str, Any]],
+    services: dict[str, Any],
+    memory_monitor_log: list[str],
+) -> dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    openviking_status = services.get("openviking", {}).get("status", "unknown")
+    substrate_status = services.get("memory_mcp", {}).get("status", "unknown")
+    scores = [float(item.get("score")) for item in memories if item.get("score") is not None]
+    events = _extract_memory_events(memory_monitor_log, limit=12)
+    last_event_at: str | None = None
+    last_success_at: str | None = None
+    last_error_at: str | None = None
+    recent_errors = sum(1 for event in events if event.get("status") == "error")
+    recent_successes = sum(1 for event in events if event.get("status") == "ok")
+    pressure_events = [event for event in events if event.get("type") == "memory_pressure"]
+    causes: list[dict[str, str]] = []
+
+    if events:
+        last_event_at = events[0].get("ts")
+        last_success_at = next((event.get("ts") for event in events if event.get("status") == "ok"), None)
+        last_error_at = next((event.get("ts") for event in events if event.get("status") == "error"), None)
+
+    freshness_seconds: int | None = None
+    if last_event_at:
+        try:
+            freshness_seconds = max(0, int((now - datetime.fromisoformat(last_event_at)).total_seconds()))
+        except ValueError:
+            freshness_seconds = None
+
+    recall_status = "up" if memories else ("degraded" if substrate_status == "up" else substrate_status)
+    status = "up"
+    warnings: list[str] = []
+    if substrate_status != "up":
+        status = "down" if substrate_status == "down" else "degraded"
+        warnings.append("Memory MCP is not healthy.")
+        causes.append({"kind": "substrate", "severity": status, "summary": "Memory MCP is not healthy."})
+    elif recent_errors > recent_successes and recent_errors > 0:
+        status = "degraded"
+        warnings.append("Recent memory monitor activity is error-heavy.")
+        causes.append({"kind": "operations", "severity": "degraded", "summary": "Recent memory operations are error-heavy."})
+    elif freshness_seconds is not None and freshness_seconds > 1800:
+        status = "degraded"
+        warnings.append("Memory activity looks stale.")
+        causes.append({"kind": "stale", "severity": "degraded", "summary": "Memory activity looks stale."})
+    if pressure_events:
+        status = "degraded" if status == "up" else status
+        latest_pressure = pressure_events[0].get("resource") or {}
+        free_mb = latest_pressure.get("free_mb")
+        if free_mb is not None:
+            warnings.append(f"Memory pressure detected: only {free_mb}MB free.")
+            causes.append({"kind": "pressure", "severity": "degraded", "summary": f"Only {free_mb}MB free on host."})
+        else:
+            warnings.append("Memory pressure detected in the monitor log.")
+            causes.append({"kind": "pressure", "severity": "degraded", "summary": "Memory pressure detected in the monitor log."})
+    if openviking_status == "down":
+        warnings.append("OpenViking transport is down.")
+        causes.append({"kind": "gateway", "severity": "down", "summary": "OpenViking transport is down."})
+
+    priority = {"substrate": 0, "gateway": 1, "pressure": 2, "operations": 3, "stale": 4}
+    causes.sort(key=lambda cause: priority.get(cause.get("kind", "stale"), 99))
+    primary_cause = causes[0] if causes else {"kind": "healthy", "severity": "up", "summary": "Memory path is healthy."}
+
+    return {
+        "status": status,
+        "gateway_status": openviking_status,
+        "substrate_status": substrate_status,
+        "recall_status": recall_status,
+        "recall_count": len(memories),
+        "average_score": round(sum(scores) / len(scores), 3) if scores else None,
+        "top_score": round(max(scores), 3) if scores else None,
+        "freshness_seconds": freshness_seconds,
+        "last_event_at": last_event_at,
+        "last_success_at": last_success_at,
+        "last_error_at": last_error_at,
+        "recent_successes": recent_successes,
+        "recent_errors": recent_errors,
+        "pressure_events": len(pressure_events),
+        "component_health": {
+            "gateway": openviking_status,
+            "substrate": substrate_status,
+            "pressure": "degraded" if pressure_events else "up",
+            "freshness": "degraded" if freshness_seconds is not None and freshness_seconds > 1800 else "up",
+        },
+        "primary_cause": primary_cause,
+        "causes": causes,
+        "warnings": warnings,
+    }
 
 
 def _fetch_logs(n: int = 60) -> dict[str, list[str]]:
@@ -1424,7 +1694,9 @@ async def _poll_loop():
                 _state["llm_active"] = "mlx" if services.get("mlx_server", {}).get("status") == "up" else None
                 last_active = _fetch_agent_last_active(hermes_status, amp_messages)
                 _state["agents"] = _finalize_agents(agents, services, last_active)
-                _state["routing_summary"] = _build_routing_summary(_state["agents"])
+                _state["memory_summary"] = _build_memory_summary(memories, services, memory_monitor_log)
+                _state["memory_events"] = _extract_memory_events(memory_monitor_log)
+                _state["routing_summary"] = _build_routing_summary(_state["agents"], services, _state["memory_summary"])
                 _state["cron_jobs"] = cron_jobs
                 _state["memories"] = memories
                 _state["voice_active"] = voice_active
@@ -1466,6 +1738,8 @@ async def _broadcast_status():
         "agents": _state["agents"],
         "cron_jobs": _state["cron_jobs"],
         "memories": _state["memories"],
+        "memory_summary": _state["memory_summary"],
+        "memory_events": _state["memory_events"],
         "llm_active": _state["llm_active"],
         "voice_active": _state["voice_active"],
         "system": _state["system"],
@@ -1477,6 +1751,7 @@ async def _broadcast_status():
         "service_history": _state["service_history"],
         "routing_summary": _state["routing_summary"],
         "permission_audit_summary": _state["permission_audit_summary"],
+        "agent_messages": _state["agent_messages"],
     }
     data = json.dumps(payload)
     async with _ws_lock:
@@ -1756,6 +2031,11 @@ async def api_memories():
     return {"memories": _state["memories"]}
 
 
+@app.get("/api/memory-events")
+async def api_memory_events():
+    return {"events": _state["memory_events"]}
+
+
 @app.get("/api/system")
 async def api_system():
     metrics = await asyncio.get_event_loop().run_in_executor(None, _fetch_system_metrics)
@@ -1821,7 +2101,62 @@ async def api_amp_messages():
     return {"messages": messages}
 
 
+@app.get("/api/agent-messages")
+async def api_agent_messages(limit: int = 50, agent: str | None = None):
+    messages = _read_agent_messages(limit=max(1, min(limit, 200)))
+    if agent:
+        needle = agent.strip().lower()
+        messages = [
+            message for message in messages
+            if str(message.get("from", "")).lower() == needle or str(message.get("to", "")).lower() == needle
+        ]
+    return {"messages": messages}
+
+
+@app.post("/api/agent-messages")
+async def api_post_agent_message(payload: dict[str, Any] = Body(...)):
+    record = _append_agent_message(_validate_agent_message(payload))
+    await _broadcast_status()
+    return {"ok": True, "message": record}
+
+
 _AMP_ALLOWED_TYPES = {"notification", "request", "task", "response"}
+
+
+def _validate_agent_message(payload: dict[str, Any]) -> dict[str, Any]:
+    def _clean_ident(key: str, default: str | None = None) -> str:
+        value = str(payload.get(key) or default or "").strip()
+        if not value:
+            raise HTTPException(status_code=422, detail=f"{key} required")
+        if len(value) > 100 or not re.match(r"^[a-zA-Z0-9._@\-]+$", value):
+            raise HTTPException(status_code=422, detail=f"{key} invalid")
+        return value
+
+    def _clean_text(key: str, *, required: bool = False, default: str = "") -> str:
+        value = str(payload.get(key) or default).strip()
+        if required and not value:
+            raise HTTPException(status_code=422, detail=f"{key} required")
+        if len(value) > 4000:
+            raise HTTPException(status_code=422, detail=f"{key} too long")
+        return value
+
+    files: list[str] = []
+    raw_files = payload.get("files") or []
+    if isinstance(raw_files, list):
+        for item in raw_files[:20]:
+            cleaned = str(item).strip()
+            if cleaned:
+                files.append(cleaned[:300])
+
+    return {
+        "from": _clean_ident("from_agent"),
+        "to": _clean_ident("to_agent"),
+        "role": _clean_ident("role", "handoff"),
+        "task": _clean_text("task"),
+        "summary": _clean_text("summary", required=True),
+        "details": _clean_text("details"),
+        "files": files,
+    }
 
 
 class AmpSendRequest(BaseModel):
@@ -2793,10 +3128,13 @@ async def websocket_endpoint(ws: WebSocket):
         "agents": _state["agents"],
         "cron_jobs": _state["cron_jobs"],
         "memories": _state["memories"],
+        "memory_summary": _state["memory_summary"],
+        "memory_events": _state["memory_events"],
         "llm_active": _state["llm_active"],
         "voice_active": _state["voice_active"],
         "trending_repos": _state["trending_repos"],
         "insights": _insights,
+        "agent_messages": _state["agent_messages"],
     }
     try:
         await ws.send_text(json.dumps(payload))

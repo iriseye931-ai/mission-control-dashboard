@@ -33,7 +33,7 @@ export const useWebSocket = () => {
       if (unmountedRef.current) return
       try {
         const msg = JSON.parse(event.data)
-        const { setAgents, setServices, setServiceHistory, setCronJobs, setMemories, setLastUpdate, setLlmActive, setVoiceActive, setSystem, setMemoryMonitorLog, setLogs, setAmpMessages, setHermesStatus, setRoutingSummary, setPermissionAuditSummary, setTrendingRepos, addInsight, setInsights } =
+        const { setAgents, setServices, setServiceHistory, setCronJobs, setMemories, setMemorySummary, setMemoryEvents, setLastUpdate, setLlmActive, setVoiceActive, setSystem, setMemoryMonitorLog, setLogs, setAmpMessages, setHermesStatus, setRoutingSummary, setPermissionAuditSummary, setTrendingRepos, addInsight, setInsights, setAgentMessages } =
           useDashboardStore.getState()
         setLastUpdate(new Date())
 
@@ -49,6 +49,8 @@ export const useWebSocket = () => {
           if (su.service_history) setServiceHistory(su.service_history)
           if (su.cron_jobs) setCronJobs(su.cron_jobs)
           if (su.memories) setMemories(su.memories)
+          if (su.memory_summary) setMemorySummary(su.memory_summary)
+          if (su.memory_events) setMemoryEvents(su.memory_events)
           if (su.llm_active !== undefined) setLlmActive(su.llm_active ?? null)
           if (su.voice_active !== undefined) setVoiceActive(su.voice_active)
           if (su.system) setSystem(su.system)
@@ -60,6 +62,7 @@ export const useWebSocket = () => {
           if (su.permission_audit_summary) setPermissionAuditSummary(su.permission_audit_summary)
           if (su.trending_repos) setTrendingRepos(su.trending_repos)
           if (su.insights) setInsights(su.insights)
+          if (su.agent_messages) setAgentMessages(su.agent_messages)
         }
       } catch {
         // malformed message — ignore

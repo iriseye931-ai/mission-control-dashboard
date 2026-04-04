@@ -57,6 +57,7 @@ export interface ServiceHealth {
   error?: string
   detail?: unknown
   models?: string[]
+  active_model?: string
 }
 
 export interface CronJob {
@@ -84,6 +85,48 @@ export interface MemoryEntry {
   tags?: string[]
 }
 
+export interface MemorySummary {
+  status: string
+  gateway_status: string
+  substrate_status: string
+  recall_status: string
+  recall_count: number
+  average_score?: number | null
+  top_score?: number | null
+  freshness_seconds?: number | null
+  last_event_at?: string | null
+  last_success_at?: string | null
+  last_error_at?: string | null
+  recent_successes: number
+  recent_errors: number
+  pressure_events?: number
+  component_health?: Record<string, string>
+  primary_cause?: {
+    kind: string
+    severity: string
+    summary: string
+  }
+  causes?: {
+    kind: string
+    severity: string
+    summary: string
+  }[]
+  warnings: string[]
+}
+
+export interface MemoryEvent {
+  ts?: string | null
+  type: string
+  status: string
+  source?: string
+  latency_ms?: number | null
+  resource?: {
+    free_mb?: number
+    used_gb?: number
+  } | null
+  summary: string
+}
+
 export interface Message {
   role: 'user' | 'assistant'
   content: string
@@ -99,6 +142,11 @@ export interface SystemMetrics {
   mlx_ram_gb: number
   mlx_pid: number | null
   local_pct: number
+  disk_pct: number
+  disk_used_gb: number
+  disk_total_gb: number
+  uptime_seconds: number
+  load_1m: number
 }
 
 export interface AmpMessage {
@@ -129,6 +177,10 @@ export interface RoutingSummary {
   premium_total_count: number
   local_default?: string
   specialized_agents: string[]
+  memory_status?: string
+  memory_ready?: boolean
+  memory_mode?: string
+  warnings?: string[]
   guidance?: Record<string, string>
 }
 
@@ -148,6 +200,12 @@ export interface PermissionAuditEntry {
   mode: string
   reason?: string | null
   input_summary?: string | null
+}
+
+export interface GraphSelection {
+  type: 'agent' | 'service'
+  key: string
+  label: string
 }
 
 export interface MeshLogs {
@@ -185,6 +243,18 @@ export interface SessionEntry {
   content: string
 }
 
+export interface AgentMessage {
+  id: string
+  timestamp: string
+  from: string
+  to: string
+  role: string
+  task: string
+  summary: string
+  details: string
+  files: string[]
+}
+
 export interface StatusUpdate {
   type: 'status_update'
   timestamp?: string
@@ -193,6 +263,8 @@ export interface StatusUpdate {
   service_history?: Record<string, ServiceHistoryPoint[]>
   cron_jobs?: CronJob[]
   memories?: MemoryEntry[]
+  memory_summary?: MemorySummary
+  memory_events?: MemoryEvent[]
   llm_active?: string | null
   voice_active?: boolean
   system?: SystemMetrics
@@ -204,4 +276,5 @@ export interface StatusUpdate {
   permission_audit_summary?: PermissionAuditSummary
   trending_repos?: TrendingRepo[]
   insights?: MeshInsight[]
+  agent_messages?: AgentMessage[]
 }

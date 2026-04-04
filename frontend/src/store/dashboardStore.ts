@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { Agent, ServiceHealth, ServiceHistoryPoint, CronJob, MemoryEntry, Message, SystemMetrics, AmpMessage, HermesStatus, MeshLogs, TrendingRepo, MeshInsight, RoutingSummary, PermissionAuditSummary } from '../types'
+import { Agent, ServiceHealth, ServiceHistoryPoint, CronJob, MemoryEntry, MemorySummary, MemoryEvent, Message, SystemMetrics, AmpMessage, HermesStatus, MeshLogs, TrendingRepo, MeshInsight, RoutingSummary, PermissionAuditSummary, AgentMessage } from '../types'
 
 interface DashboardState {
   // Connection
@@ -11,6 +11,8 @@ interface DashboardState {
   services: Record<string, ServiceHealth>
   cronJobs: CronJob[]
   memories: MemoryEntry[]
+  memorySummary: MemorySummary | null
+  memoryEvents: MemoryEvent[]
   system: SystemMetrics | null
   memoryMonitorLog: string[]
   logs: MeshLogs
@@ -18,6 +20,7 @@ interface DashboardState {
   hermesStatus: HermesStatus | null
   routingSummary: RoutingSummary | null
   permissionAuditSummary: PermissionAuditSummary | null
+  agentMessages: AgentMessage[]
 
   // LLM / Voice
   llmActive: string | null
@@ -46,6 +49,8 @@ interface DashboardState {
   setCronJobs: (jobs: CronJob[]) => void
   addMemory: (memory: MemoryEntry) => void
   setMemories: (memories: MemoryEntry[]) => void
+  setMemorySummary: (summary: MemorySummary | null) => void
+  setMemoryEvents: (events: MemoryEvent[]) => void
   addChatMessage: (msg: Message) => void
   appendChatToken: (token: string) => void
   setChatLoading: (loading: boolean) => void
@@ -61,6 +66,7 @@ interface DashboardState {
   setHermesStatus: (status: HermesStatus) => void
   setRoutingSummary: (summary: RoutingSummary) => void
   setPermissionAuditSummary: (summary: PermissionAuditSummary | null) => void
+  setAgentMessages: (messages: AgentMessage[]) => void
   setServiceHistory: (history: Record<string, ServiceHistoryPoint[]>) => void
   setTrendingRepos: (repos: TrendingRepo[]) => void
   addInsight: (insight: MeshInsight) => void
@@ -75,6 +81,8 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   services: {},
   cronJobs: [],
   memories: [],
+  memorySummary: null,
+  memoryEvents: [],
   system: null,
   memoryMonitorLog: [],
   logs: { mlx: [], memory: [] },
@@ -82,6 +90,7 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   hermesStatus: null,
   routingSummary: null,
   permissionAuditSummary: null,
+  agentMessages: [],
 
   llmActive: null,
   voiceActive: false,
@@ -104,6 +113,8 @@ export const useDashboardStore = create<DashboardState>((set) => ({
       memories: [memory, ...state.memories].slice(0, 100),
     })),
   setMemories: (memories) => set({ memories }),
+  setMemorySummary: (memorySummary) => set({ memorySummary }),
+  setMemoryEvents: (memoryEvents) => set({ memoryEvents }),
   addChatMessage: (msg) =>
     set((state) => ({ chatHistory: [...state.chatHistory, msg] })),
   appendChatToken: (token) =>
@@ -128,6 +139,7 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   setHermesStatus: (hermesStatus) => set({ hermesStatus }),
   setRoutingSummary: (routingSummary) => set({ routingSummary }),
   setPermissionAuditSummary: (permissionAuditSummary) => set({ permissionAuditSummary }),
+  setAgentMessages: (agentMessages) => set({ agentMessages }),
   setServiceHistory: (serviceHistory) => set({ serviceHistory }),
   setTrendingRepos: (trendingRepos) => set({ trendingRepos }),
   addInsight: (insight) => set((state) => ({ insights: [insight, ...state.insights].slice(0, 20) })),
