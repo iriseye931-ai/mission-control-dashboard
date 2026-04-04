@@ -216,8 +216,10 @@ function HermesTab({
   const [profileBusy, setProfileBusy] = useState<string | null>(null)
   const [backgroundPrompt, setBackgroundPrompt] = useState('')
   const [backgroundProfile, setBackgroundProfile] = useState('default')
+  const [backgroundWorktree, setBackgroundWorktree] = useState(false)
   const [backgroundBusy, setBackgroundBusy] = useState(false)
   const [backgroundStopBusy, setBackgroundStopBusy] = useState<string | null>(null)
+  const [quickCommandBusy, setQuickCommandBusy] = useState<string | null>(null)
   const [auditEntries, setAuditEntries] = useState<PermissionAuditEntry[]>([])
   const [auditLoading, setAuditLoading] = useState(false)
   const [expandedAgents, setExpandedAgents] = useState<Record<string, boolean>>({})
@@ -281,6 +283,8 @@ function HermesTab({
   const hermesAgent = agents.find((agent) => agent.name === 'hermes')
   const hermesNativeProfiles = (hermesAgent?.local_profiles ?? []).filter((profile) => profile.profile_kind === 'hermes-native')
   const backgroundTasks = status?.background_tasks ?? []
+  const activeProfileMeta = hermesNativeProfiles.find((profile) => (profile.hermes_profile ?? profile.display_name ?? profile.name) === backgroundProfile) ?? hermesNativeProfiles[0]
+  const quickCommands = activeProfileMeta?.quick_commands ?? []
   const focusedAgent = focus?.type === 'agent'
     ? agents.find((agent) => (agent.name ?? '').toLowerCase().replace(/\s+/g, '-') === focus.key)
     : null
@@ -367,7 +371,12 @@ function HermesTab({
       const res = await fetch('/api/hermes/background', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ profile: backgroundProfile, prompt: backgroundPrompt }),
+        body: JSON.stringify({
+          profile: backgroundProfile,
+          prompt: backgroundPrompt,
+          use_worktree: backgroundWorktree,
+          repo_path: backgroundWorktree ? '/Users/iris/Projects/mission-control-dashboard' : undefined,
+        }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail ?? `Server error: ${res.status}`)
@@ -377,6 +386,25 @@ function HermesTab({
       setTaskResult(err instanceof Error ? err.message : 'Background launch failed')
     } finally {
       setBackgroundBusy(false)
+    }
+  }
+
+  async function runQuickCommand(profile: string, commandName: string) {
+    setQuickCommandBusy(`${profile}:${commandName}`)
+    try {
+      const res = await fetch('/api/hermes/quick-command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profile, command_name: commandName }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail ?? `Server error: ${res.status}`)
+      const output = (data.stdout || data.stderr || '').trim()
+      setTaskResult(`quick ${commandName}: ${data.status}${output ? ` · ${output.slice(0, 120)}` : ''}`)
+    } catch (err) {
+      setTaskResult(err instanceof Error ? err.message : 'Quick command failed')
+    } finally {
+      setQuickCommandBusy(null)
     }
   }
 
@@ -653,6 +681,14 @@ function HermesTab({
                       >
                         {backgroundBusy ? 'Launching…' : 'Launch background'}
                       </button>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 8, color: '#64748b', fontFamily: 'monospace' }}>
+                        <input
+                          type="checkbox"
+                          checked={backgroundWorktree}
+                          onChange={(e) => setBackgroundWorktree(e.target.checked)}
+                        />
+                        worktree
+                      </label>
                     </div>
                     <textarea
                       value={backgroundPrompt}
@@ -678,6 +714,7 @@ function HermesTab({
                           </div>
                           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                             {task.log_path && <span style={{ fontSize: 8, color: '#475569', fontFamily: 'monospace' }}>{task.log_path}</span>}
+                            {task.mode === 'worktree' && task.repo_path && <span style={{ fontSize: 8, color: '#334155', fontFamily: 'monospace' }}>{task.repo_path}</span>}
                             {task.running && (
                               <button
                                 type="button"
@@ -694,6 +731,38 @@ function HermesTab({
                     </div>
                   )}
                 </div>
+                {quickCommands.length > 0 && (
+                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid rgba(15,23,42,0.45)' }}>
+                    <div style={{ fontSize: 8, color: '#475569', fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: 8 }}>
+                      quick commands
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      {quickCommands.map((command) => {
+                        const busyKey = `${backgroundProfile}:${command.name}`
+                        return (
+                          <button
+                            key={command.name}
+                            type="button"
+                            onClick={() => runQuickCommand(backgroundProfile, command.name)}
+                            disabled={quickCommandBusy === busyKey}
+                            style={{
+                              fontSize: 8,
+                              padding: '5px 8px',
+                              borderRadius: 999,
+                              border: '1px solid #1e293b',
+                              background: quickCommandBusy === busyKey ? '#1f2937' : '#0a0a0f',
+                              color: quickCommandBusy === busyKey ? '#475569' : '#94a3b8',
+                              cursor: quickCommandBusy === busyKey ? 'not-allowed' : 'pointer',
+                              fontFamily: 'monospace',
+                            }}
+                          >
+                            /{command.name}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
               </PanelCard>
             ) : (
               <p style={{ fontSize: 10, color: '#334155' }}>No active Hermes session</p>

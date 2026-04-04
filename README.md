@@ -240,6 +240,7 @@ Mission Control now also detects Hermes-native isolated profiles from `~/.hermes
 - Hermes-native profiles for isolated config, memory, sessions, and gateway state
 - Hermes session lineage for latest titled session, resume target, per-profile session counts, and whether session search/FTS is available
 - Hermes background work for launching deeper side tasks without blocking the main operator session
+- Hermes worktree launches and quick-command surfacing for isolated repo jobs and profile-specific operator shortcuts
 
 - `workhorse`
   `Qwen3.5-35B-A3B-4bit`

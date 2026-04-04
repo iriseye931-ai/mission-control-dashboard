@@ -27,6 +27,7 @@ from main import (
     _fetch_hermes_profile_session_overview,
     _fetch_hermes_sessions_overview,
     _refresh_background_task_state,
+    _read_hermes_quick_commands,
     _recommend_route,
 )
 
@@ -424,12 +425,25 @@ class TestHermesBackgroundTasks:
     def test_build_background_command_uses_profile(self):
         assert _build_hermes_background_command("default", "hello")[1:] == ["chat", "-q", "hello"]
         assert _build_hermes_background_command("mesh-sidecar", "hello")[1:] == ["-p", "mesh-sidecar", "chat", "-q", "hello"]
+        assert _build_hermes_background_command("mesh-sidecar", "hello", use_worktree=True)[1:] == ["-p", "mesh-sidecar", "chat", "--worktree", "-q", "hello"]
 
     def test_refresh_background_task_state_marks_finished(self):
         task = {"id": "bg_1", "pid": 999999, "status": "running", "running": True}
         refreshed = _refresh_background_task_state(task)
         assert refreshed["running"] is False
         assert refreshed["status"] == "finished"
+
+    def test_reads_quick_commands_from_profile_config(self, tmp_path):
+        profile_home = tmp_path / "profile"
+        profile_home.mkdir()
+        (profile_home / "config.yaml").write_text(
+            "quick_commands:\n"
+            "  status:\n"
+            "    type: exec\n"
+            "    command: echo ok\n"
+        )
+        commands = _read_hermes_quick_commands(profile_home)
+        assert commands == [{"name": "status", "type": "exec", "command": "echo ok"}]
 
 
 class TestAvailabilityEndpoint:

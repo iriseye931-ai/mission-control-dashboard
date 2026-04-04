@@ -57,6 +57,11 @@ export interface Agent {
     alias_path?: string | null
     alias_installed?: boolean
     gateway_status?: string
+    quick_commands?: {
+      name: string
+      type: string
+      command?: string | null
+    }[]
     session_overview?: {
       profile: string
       session_count: number
@@ -208,6 +213,8 @@ export interface HermesStatus {
     pid?: number
     status: string
     running: boolean
+    mode?: string
+    repo_path?: string | null
     started_at: string
     ended_at?: string | null
   }[]

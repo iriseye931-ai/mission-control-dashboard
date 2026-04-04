@@ -15,6 +15,7 @@ import signal
 import socket
 import psutil
 import uuid
+import yaml
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, AsyncGenerator
@@ -562,6 +563,7 @@ def _enrich_local_profile(agent_name: str, profile: dict[str, Any]) -> dict[str,
         enriched["runtime"] = "hermes-profile"
         enriched["display_name"] = str(profile.get("display_name") or hermes_profile)
         enriched["session_overview"] = _fetch_hermes_profile_session_overview(profile_home, hermes_profile)
+        enriched["quick_commands"] = _read_hermes_quick_commands(profile_home)
         return enriched
     model_path = _resolve_profile_model(profile)
     pid_path = _profile_pid_path(agent_name, str(profile.get("name", "")))
@@ -621,6 +623,57 @@ def _read_hermes_profile_model(profile_home: Path) -> dict[str, str | None]:
         "provider": _match(r"^  provider:\s*(.+)$"),
         "base_url": _match(r"^  base_url:\s*(.+)$"),
     }
+
+
+def _read_hermes_profile_config(profile_home: Path) -> dict[str, Any]:
+    config_path = profile_home / "config.yaml"
+    if not config_path.exists():
+        return {}
+    try:
+        loaded = yaml.safe_load(config_path.read_text(errors="replace"))
+    except Exception:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _read_hermes_quick_commands(profile_home: Path) -> list[dict[str, Any]]:
+    config = _read_hermes_profile_config(profile_home)
+    commands = config.get("quick_commands")
+    if not isinstance(commands, dict):
+        return []
+    items: list[dict[str, Any]] = []
+    for name, spec in commands.items():
+        if not isinstance(spec, dict):
+            continue
+        items.append({
+            "name": str(name),
+            "type": str(spec.get("type") or "exec"),
+            "command": str(spec.get("command") or "").strip() or None,
+        })
+    return items
+
+
+def _resolve_repo_root(repo_path: str | None) -> Path | None:
+    if not repo_path:
+        return None
+    path = Path(repo_path).expanduser()
+    if not path.exists():
+        return None
+    target = path if path.is_dir() else path.parent
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(target),
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if proc.returncode != 0:
+            return None
+        resolved = proc.stdout.strip()
+        return Path(resolved) if resolved else None
+    except Exception:
+        return None
 
 
 def _fetch_hermes_profile_session_overview(profile_home: Path, profile_name: str) -> dict[str, Any]:
@@ -791,21 +844,35 @@ def _fetch_hermes_background_tasks() -> list[dict[str, Any]]:
     return tasks
 
 
-def _build_hermes_background_command(profile_name: str, prompt: str) -> list[str]:
+def _build_hermes_background_command(profile_name: str, prompt: str, use_worktree: bool = False) -> list[str]:
     safe_profile = (profile_name or "default").strip() or "default"
-    if safe_profile == "default":
-        return [str(HERMES_BIN), "chat", "-q", prompt]
-    return [str(HERMES_BIN), "-p", safe_profile, "chat", "-q", prompt]
+    command = [str(HERMES_BIN)]
+    if safe_profile != "default":
+        command.extend(["-p", safe_profile])
+    command.append("chat")
+    if use_worktree:
+        command.append("--worktree")
+    command.extend(["-q", prompt])
+    return command
 
 
-def _launch_hermes_background_task(profile_name: str, prompt: str, title: str | None = None) -> dict[str, Any]:
+def _launch_hermes_background_task(
+    profile_name: str,
+    prompt: str,
+    title: str | None = None,
+    use_worktree: bool = False,
+    repo_path: str | None = None,
+) -> dict[str, Any]:
     if not HERMES_BIN.exists():
         raise RuntimeError("Hermes CLI is not available")
+    repo_root = _resolve_repo_root(repo_path) if use_worktree else None
+    if use_worktree and not repo_root:
+        raise RuntimeError("valid git repo required for Hermes worktree launch")
 
     task_id = f"bg_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     HERMES_BACKGROUND_LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_path = HERMES_BACKGROUND_LOG_DIR / f"{task_id}.log"
-    command = _build_hermes_background_command(profile_name, prompt)
+    command = _build_hermes_background_command(profile_name, prompt, use_worktree=use_worktree)
     log_handle = open(log_path, "a", encoding="utf-8")
     try:
         proc = subprocess.Popen(
@@ -813,6 +880,7 @@ def _launch_hermes_background_task(profile_name: str, prompt: str, title: str | 
             stdout=log_handle,
             stderr=subprocess.STDOUT,
             start_new_session=True,
+            cwd=str(repo_root) if repo_root else None,
             env={**os.environ, "PATH": f"{LOCAL_BIN_DIR}:{os.environ.get('PATH', '')}"},
         )
     finally:
@@ -828,6 +896,8 @@ def _launch_hermes_background_task(profile_name: str, prompt: str, title: str | 
         "pid": proc.pid,
         "status": "running",
         "running": True,
+        "mode": "worktree" if use_worktree else "background",
+        "repo_path": str(repo_root) if repo_root else None,
         "started_at": _now_iso(),
         "ended_at": None,
     }
@@ -2713,7 +2783,8 @@ async def api_hermes():
 
 
 @app.post("/api/hermes/background")
-async def api_hermes_background(req: HermesBackgroundTaskRequest):
+async def api_hermes_background(payload: dict = Body(...)):
+    req = HermesBackgroundTaskRequest(**payload)
     hermes_agent = next((agent for agent in _state.get("agents", []) if agent.get("name") == "hermes"), None)
     profiles = (hermes_agent or {}).get("local_profiles") or []
     target = _find_hermes_profile(profiles, req.profile, f"profile:{req.profile}")
@@ -2721,7 +2792,13 @@ async def api_hermes_background(req: HermesBackgroundTaskRequest):
     try:
         task = await asyncio.get_event_loop().run_in_executor(
             None,
-            lambda: _launch_hermes_background_task(resolved_profile, req.prompt, req.title),
+            lambda: _launch_hermes_background_task(
+                resolved_profile,
+                req.prompt,
+                req.title,
+                use_worktree=req.use_worktree,
+                repo_path=req.repo_path,
+            ),
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -2741,6 +2818,46 @@ async def api_hermes_background_stop(task_id: str):
     _state["hermes_status"] = await asyncio.get_event_loop().run_in_executor(None, _fetch_hermes_status)
     await _broadcast_status()
     return {"ok": True, "task": task}
+
+
+@app.post("/api/hermes/quick-command")
+async def api_hermes_quick_command(payload: dict = Body(...)):
+    req = HermesQuickCommandRequest(**payload)
+    hermes_agent = next((agent for agent in _state.get("agents", []) if agent.get("name") == "hermes"), None)
+    profiles = (hermes_agent or {}).get("local_profiles") or []
+    target = _find_hermes_profile(profiles, req.profile, f"profile:{req.profile}")
+    resolved_profile = str((target or {}).get("hermes_profile") or req.profile or "default")
+    profile_home = _hermes_profile_home(resolved_profile)
+    quick_commands = _read_hermes_quick_commands(profile_home)
+    command = next((item for item in quick_commands if item.get("name") == req.command_name), None)
+    if not command:
+        raise HTTPException(status_code=404, detail="quick command not found")
+    if command.get("type") != "exec" or not command.get("command"):
+        raise HTTPException(status_code=400, detail="only exec quick commands are supported")
+    try:
+        result = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: subprocess.run(
+                command["command"],
+                shell=True,
+                cwd=str(profile_home),
+                capture_output=True,
+                text=True,
+                timeout=20,
+                env={**os.environ, "PATH": f"{LOCAL_BIN_DIR}:{os.environ.get('PATH', '')}"},
+            ),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"quick command failed: {exc}")
+    return {
+        "ok": result.returncode == 0,
+        "profile": resolved_profile,
+        "command_name": req.command_name,
+        "status": "ok" if result.returncode == 0 else "error",
+        "stdout": result.stdout[-2000:],
+        "stderr": result.stderr[-2000:],
+        "exit_code": result.returncode,
+    }
 
 
 @app.get("/api/trending")
@@ -2970,6 +3087,8 @@ class HermesBackgroundTaskRequest(BaseModel):
     profile: str = "default"
     prompt: str
     title: str | None = None
+    use_worktree: bool = False
+    repo_path: str | None = None
 
     @field_validator("profile")
     @classmethod
@@ -2999,6 +3118,41 @@ class HermesBackgroundTaskRequest(BaseModel):
             return None
         if len(v) > 120:
             raise ValueError("title too long (max 120)")
+        return v
+
+    @field_validator("repo_path")
+    @classmethod
+    def _chk_repo_path(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        if len(v) > 500:
+            raise ValueError("repo_path too long (max 500)")
+        return v
+
+
+class HermesQuickCommandRequest(BaseModel):
+    profile: str = "default"
+    command_name: str
+
+    @field_validator("profile")
+    @classmethod
+    def _chk_quick_profile(cls, v: str) -> str:
+        v = v.strip().lower()
+        if not v:
+            raise ValueError("profile required")
+        return v
+
+    @field_validator("command_name")
+    @classmethod
+    def _chk_quick_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("command_name required")
+        if len(v) > 100:
+            raise ValueError("command_name too long (max 100)")
         return v
 
 
