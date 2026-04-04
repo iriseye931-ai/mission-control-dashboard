@@ -8,6 +8,14 @@ Real-time dashboard for multi-agent AI systems — built for the **Claude Code +
 
 ---
 
+## Visuals
+
+- full dashboard capture: [assets/dashboard-full.png](/Users/iris/Projects/mission-control-dashboard/assets/dashboard-full.png)
+- focused preview capture: [assets/dashboard-preview.png](/Users/iris/Projects/mission-control-dashboard/assets/dashboard-preview.png)
+- release history: [CHANGELOG.md](/Users/iris/Projects/mission-control-dashboard/CHANGELOG.md)
+
+---
+
 ## What it shows
 
 Most local AI setups are invisible. Agents run in separate terminals, routing decisions disappear into logs, memory health is hard to interpret, and operator state gets scattered across tools. This dashboard pulls that into one live surface.
