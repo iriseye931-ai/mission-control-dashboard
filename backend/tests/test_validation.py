@@ -29,6 +29,7 @@ from main import (
     _fetch_hermes_provider_overview,
     _fetch_hermes_profile_session_overview,
     _fetch_hermes_sessions_overview,
+    _fetch_hermes_skill_overview,
     _fetch_hermes_toolset_overview,
     _refresh_background_task_state,
     _read_hermes_quick_commands,
@@ -515,6 +516,28 @@ class TestHermesSessions:
         assert overview["has_terminal"] is True
         assert overview["has_memory"] is True
         assert overview["has_delegation"] is True
+
+    def test_skill_overview_reads_local_and_external_dirs(self, tmp_path):
+        profile_home = tmp_path / "mesh-sidecar"
+        local_skill = profile_home / "skills" / "devops" / "local-skill"
+        external_root = tmp_path / "shared-skills"
+        external_skill = external_root / "mesh" / "mesh-health"
+        local_skill.mkdir(parents=True)
+        external_skill.mkdir(parents=True)
+        (local_skill / "SKILL.md").write_text("# local\n")
+        (external_skill / "SKILL.md").write_text("# external\n")
+        (profile_home / "config.yaml").write_text(
+            "skills:\n"
+            f"  external_dirs:\n"
+            f"    - {external_root}\n"
+        )
+
+        overview = _fetch_hermes_skill_overview(profile_home)
+        assert overview["local_skill_count"] == 1
+        assert overview["external_dir_count"] == 1
+        assert overview["external_skill_count"] == 1
+        assert overview["shared_skills_connected"] is True
+        assert "mesh/mesh-health" in overview["external_dirs"][0]["sample_skills"]
 
     def test_background_log_endpoint_returns_tail(self, tmp_path, monkeypatch):
         import main as main_mod

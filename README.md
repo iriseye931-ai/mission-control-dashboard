@@ -245,6 +245,7 @@ Mission Control now also detects Hermes-native isolated profiles from `~/.hermes
 - Hermes checkpoint awareness for rollback readiness, snapshot depth, and per-profile rollback guidance before destructive changes
 - Hermes provider graph visibility for primary model, fallback providers, smart routing, auxiliary providers, and delegation paths per profile
 - Hermes toolset visibility and richer background-task controls for poll/log inspection directly from Mission Control
+- Hermes shared skill visibility for local skill count, external skill directories, and mesh-skill connectivity per profile
 
 - `workhorse`
   `Qwen3.5-35B-A3B-4bit`

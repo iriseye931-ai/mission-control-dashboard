@@ -1366,6 +1366,9 @@ export default function MeshGraph({
               const hermesToolsetProfiles = agentKey === 'hermes'
                 ? hermesNativeProfiles.filter((profile) => (profile.toolset_overview?.toolset_count ?? 0) > 0).length
                 : null
+              const hermesSharedSkillProfiles = agentKey === 'hermes'
+                ? hermesNativeProfiles.filter((profile) => profile.skill_overview?.shared_skills_connected).length
+                : null
 
               return (
                 <div
@@ -1464,6 +1467,14 @@ export default function MeshGraph({
                         <span style={{ fontSize: 9, color: 'rgba(150,200,220,0.44)', letterSpacing:'0.14em', textTransform:'uppercase' }}>Toolsets</span>
                         <span style={{ fontSize: 12, color: isFocused ? '#effcff' : '#c8eaf8', textAlign: 'right', minWidth: 0, lineHeight: 1.4, whiteSpace: 'normal', wordBreak: 'break-word' }}>
                           {hermesToolsetProfiles}/{hermesNativeProfiles.length} mapped
+                        </span>
+                      </div>
+                    )}
+                    {agentKey === 'hermes' && hermesSharedSkillProfiles != null && hermesSharedSkillProfiles > 0 && (
+                      <div style={{ display:'grid', gridTemplateColumns: '72px minmax(0, 1fr)', gap: 10, alignItems: 'start' }}>
+                        <span style={{ fontSize: 9, color: 'rgba(150,200,220,0.44)', letterSpacing:'0.14em', textTransform:'uppercase' }}>Skills</span>
+                        <span style={{ fontSize: 12, color: isFocused ? '#effcff' : '#c8eaf8', textAlign: 'right', minWidth: 0, lineHeight: 1.4, whiteSpace: 'normal', wordBreak: 'break-word' }}>
+                          {hermesSharedSkillProfiles}/{hermesNativeProfiles.length} shared
                         </span>
                       </div>
                     )}

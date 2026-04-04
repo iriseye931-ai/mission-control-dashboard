@@ -114,6 +114,21 @@ export interface Agent {
       has_memory: boolean
       has_delegation: boolean
     }
+    skill_overview?: {
+      local_dir: string
+      local_exists: boolean
+      local_skill_count: number
+      local_sample_skills: string[]
+      external_dirs: {
+        path: string
+        exists: boolean
+        skill_count: number
+        sample_skills: string[]
+      }[]
+      external_dir_count: number
+      external_skill_count: number
+      shared_skills_connected: boolean
+    }
     session_overview?: {
       profile: string
       session_count: number

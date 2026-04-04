@@ -567,6 +567,7 @@ def _enrich_local_profile(agent_name: str, profile: dict[str, Any]) -> dict[str,
         enriched["checkpoint_overview"] = _fetch_hermes_checkpoint_overview(profile_home, hermes_profile)
         enriched["provider_overview"] = _fetch_hermes_provider_overview(profile_home)
         enriched["toolset_overview"] = _fetch_hermes_toolset_overview(profile_home)
+        enriched["skill_overview"] = _fetch_hermes_skill_overview(profile_home)
         return enriched
     model_path = _resolve_profile_model(profile)
     pid_path = _profile_pid_path(agent_name, str(profile.get("name", "")))
@@ -778,6 +779,63 @@ def _fetch_hermes_toolset_overview(profile_home: Path) -> dict[str, Any]:
         "has_terminal": any(item in {"all", "terminal", "file"} for item in toolsets_list),
         "has_memory": any(item in {"all", "memory", "session_search"} for item in toolsets_list),
         "has_delegation": any(item in {"all", "delegation", "code_execution"} for item in toolsets_list),
+    }
+
+
+def _resolve_hermes_skill_dirs(profile_home: Path) -> tuple[Path, list[Path]]:
+    local_dir = profile_home / "skills"
+    config = _read_hermes_profile_config(profile_home)
+    skills_cfg = config.get("skills")
+    skills_cfg = skills_cfg if isinstance(skills_cfg, dict) else {}
+    external = skills_cfg.get("external_dirs")
+    external = external if isinstance(external, list) else []
+    external_dirs: list[Path] = []
+    for item in external:
+        raw = str(item or "").strip()
+        if not raw:
+            continue
+        expanded = os.path.expandvars(os.path.expanduser(raw))
+        external_dirs.append(Path(expanded))
+    return local_dir, external_dirs
+
+
+def _scan_skill_names(root: Path) -> list[str]:
+    if not root.exists():
+        return []
+    names: list[str] = []
+    try:
+        for skill_file in root.glob("**/SKILL.md"):
+            parent = skill_file.parent
+            rel = parent.relative_to(root)
+            names.append("/".join(rel.parts))
+    except Exception:
+        return []
+    return sorted(dict.fromkeys(names))
+
+
+def _fetch_hermes_skill_overview(profile_home: Path) -> dict[str, Any]:
+    local_dir, external_dirs = _resolve_hermes_skill_dirs(profile_home)
+    local_names = _scan_skill_names(local_dir)
+    external_info: list[dict[str, Any]] = []
+    external_total = 0
+    for path in external_dirs:
+        names = _scan_skill_names(path)
+        external_total += len(names)
+        external_info.append({
+            "path": str(path),
+            "exists": path.exists(),
+            "skill_count": len(names),
+            "sample_skills": names[:5],
+        })
+    return {
+        "local_dir": str(local_dir),
+        "local_exists": local_dir.exists(),
+        "local_skill_count": len(local_names),
+        "local_sample_skills": local_names[:5],
+        "external_dirs": external_info,
+        "external_dir_count": len(external_info),
+        "external_skill_count": external_total,
+        "shared_skills_connected": any(item.get("exists") and item.get("skill_count", 0) > 0 for item in external_info),
     }
 
 

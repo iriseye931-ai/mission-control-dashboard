@@ -296,6 +296,7 @@ function HermesTab({
   const providerReadyProfiles = hermesNativeProfiles.filter((profile) => profile.provider_overview?.primary?.provider).length
   const smartRoutingProfiles = hermesNativeProfiles.filter((profile) => profile.provider_overview?.smart_routing_enabled).length
   const fallbackProfiles = hermesNativeProfiles.filter((profile) => (profile.provider_overview?.fallback_count ?? 0) > 0).length
+  const sharedSkillProfiles = hermesNativeProfiles.filter((profile) => profile.skill_overview?.shared_skills_connected).length
   const focusedAgent = focus?.type === 'agent'
     ? agents.find((agent) => (agent.name ?? '').toLowerCase().replace(/\s+/g, '-') === focus.key)
     : null
@@ -699,6 +700,38 @@ function HermesTab({
                         </div>
                       </div>
                     ))}
+                  </div>
+                )}
+                {hermesNativeProfiles.length > 0 && (
+                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid rgba(15,23,42,0.45)' }}>
+                    <div style={{ fontSize: 8, color: '#475569', fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: 8 }}>
+                      skills
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8 }}>
+                      <MiniStat label="shared" value={`${sharedSkillProfiles}/${hermesNativeProfiles.length}`} tone={sharedSkillProfiles > 0 ? '#10b981' : '#94a3b8'} />
+                      <MiniStat label="local" value={activeProfileMeta?.skill_overview?.local_skill_count ?? 0} tone="#67e8f9" />
+                      <MiniStat label="external" value={activeProfileMeta?.skill_overview?.external_skill_count ?? 0} tone="#a78bfa" />
+                    </div>
+                    {activeProfileMeta?.skill_overview && (
+                      <div style={{ marginTop: 10, display: 'grid', gap: 6 }}>
+                        <div style={{ fontSize: 9, color: '#cbd5e1', fontFamily: 'monospace' }}>
+                          {(activeProfileMeta.display_name ?? activeProfileMeta.hermes_profile ?? activeProfileMeta.name)} · {activeProfileMeta.skill_overview.shared_skills_connected ? 'shared skills connected' : 'local skills only'}
+                        </div>
+                        <div style={{ fontSize: 8, color: '#64748b', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                          local dir: {activeProfileMeta.skill_overview.local_dir}
+                        </div>
+                        {activeProfileMeta.skill_overview.local_sample_skills.length > 0 && (
+                          <div style={{ fontSize: 8, color: '#334155', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                            local sample: {activeProfileMeta.skill_overview.local_sample_skills.join(', ')}
+                          </div>
+                        )}
+                        {activeProfileMeta.skill_overview.external_dirs.map((dir) => (
+                          <div key={dir.path} style={{ fontSize: 8, color: dir.exists ? '#475569' : '#7f1d1d', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                            external: {dir.path} · {dir.skill_count} skills{dir.sample_skills.length > 0 ? ` · ${dir.sample_skills.join(', ')}` : ''}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
                 {hermesNativeProfiles.length > 0 && (
@@ -1215,6 +1248,11 @@ function HermesTab({
                                 tools: {profile.toolset_overview.has_terminal ? 'terminal ' : ''}{profile.toolset_overview.has_memory ? 'memory ' : ''}{profile.toolset_overview.has_delegation ? 'delegation ' : ''}{profile.toolset_overview.has_browser ? 'browser' : ''}
                               </div>
                             </>
+                          )}
+                          {profile.skill_overview && (
+                            <div style={{ fontSize: 8, color: profile.skill_overview.shared_skills_connected ? '#10b981' : '#475569', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                              skills: {profile.skill_overview.local_skill_count} local · {profile.skill_overview.external_skill_count} external
+                            </div>
                           )}
                           {profile.base_url && (
                             <div style={{ fontSize: 8, color: '#334155', fontFamily: 'monospace', lineHeight: 1.5 }}>
