@@ -822,8 +822,25 @@ def _write_hermes_background_registry(tasks: list[dict[str, Any]]) -> None:
 
 def _refresh_background_task_state(task: dict[str, Any]) -> dict[str, Any]:
     refreshed = dict(task)
+    if refreshed.get("worktree_path"):
+        refreshed["worktree_path"] = re.sub(r"\x1b\[[0-9;]*m", "", str(refreshed.get("worktree_path"))).strip()
+    if refreshed.get("worktree_branch"):
+        refreshed["worktree_branch"] = re.sub(r"\x1b\[[0-9;]*m", "", str(refreshed.get("worktree_branch"))).strip()
     pid = refreshed.get("pid")
     running = bool(pid) and _pid_running(int(pid))
+    log_path = refreshed.get("log_path")
+    if log_path:
+        try:
+            log_text = Path(log_path).read_text(errors="replace")
+            log_text = re.sub(r"\x1b\[[0-9;]*m", "", log_text)
+            worktree_match = re.search(r"Worktree created:\s*(.+)", log_text)
+            branch_match = re.search(r"Branch:\s*(.+)", log_text)
+            if worktree_match and not refreshed.get("worktree_path"):
+                refreshed["worktree_path"] = worktree_match.group(1).strip()
+            if branch_match and not refreshed.get("worktree_branch"):
+                refreshed["worktree_branch"] = branch_match.group(1).strip()
+        except Exception:
+            pass
     refreshed["running"] = running
     if running:
         refreshed["status"] = "running"
@@ -926,6 +943,53 @@ def _stop_hermes_background_task(task_id: str) -> dict[str, Any] | None:
             current["status"] = "stopped"
             current["running"] = False
             current["ended_at"] = _now_iso()
+            updated = current
+        new_tasks.append(current)
+    _write_hermes_background_registry(new_tasks)
+    return updated
+
+
+def _cleanup_hermes_worktree(task_id: str) -> dict[str, Any] | None:
+    tasks = _fetch_hermes_background_tasks()
+    updated: dict[str, Any] | None = None
+    new_tasks: list[dict[str, Any]] = []
+    for task in tasks:
+        current = dict(task)
+        if current.get("id") == task_id:
+            worktree_path = str(current.get("worktree_path") or "").strip()
+            if not worktree_path:
+                raise RuntimeError("worktree path not recorded yet")
+            if current.get("running"):
+                raise RuntimeError("stop the worktree task before cleanup")
+            repo_path = current.get("repo_path")
+            git_root = _resolve_repo_root(repo_path)
+            if not git_root:
+                raise RuntimeError("repo root unavailable for worktree cleanup")
+            listed = subprocess.run(
+                ["git", "worktree", "list", "--porcelain"],
+                cwd=str(git_root),
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            listed_output = listed.stdout if listed.returncode == 0 else ""
+            if worktree_path and f"worktree {worktree_path}" not in listed_output:
+                current["status"] = "cleaned"
+                current["worktree_cleaned_at"] = _now_iso()
+                updated = current
+                continue
+            proc = subprocess.run(
+                ["git", "worktree", "remove", "--force", worktree_path],
+                cwd=str(git_root),
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            if proc.returncode != 0:
+                detail = (proc.stderr or proc.stdout or "").strip()
+                raise RuntimeError(detail or "git worktree remove failed")
+            current["status"] = "cleaned"
+            current["worktree_cleaned_at"] = _now_iso()
             updated = current
         new_tasks.append(current)
     _write_hermes_background_registry(new_tasks)
@@ -2813,6 +2877,19 @@ async def api_hermes_background(payload: dict = Body(...)):
 @app.post("/api/hermes/background/{task_id}/stop")
 async def api_hermes_background_stop(task_id: str):
     task = await asyncio.get_event_loop().run_in_executor(None, lambda: _stop_hermes_background_task(task_id))
+    if not task:
+        raise HTTPException(status_code=404, detail="background task not found")
+    _state["hermes_status"] = await asyncio.get_event_loop().run_in_executor(None, _fetch_hermes_status)
+    await _broadcast_status()
+    return {"ok": True, "task": task}
+
+
+@app.post("/api/hermes/background/{task_id}/cleanup")
+async def api_hermes_background_cleanup(task_id: str):
+    try:
+        task = await asyncio.get_event_loop().run_in_executor(None, lambda: _cleanup_hermes_worktree(task_id))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     if not task:
         raise HTTPException(status_code=404, detail="background task not found")
     _state["hermes_status"] = await asyncio.get_event_loop().run_in_executor(None, _fetch_hermes_status)

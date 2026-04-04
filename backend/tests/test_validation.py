@@ -23,6 +23,7 @@ from main import (
     _RAG_MAX_FILE_BYTES,
     _RAG_ALLOWED_EXT,
     _build_hermes_background_command,
+    _cleanup_hermes_worktree,
     _finalize_agents,
     _fetch_hermes_profile_session_overview,
     _fetch_hermes_sessions_overview,
@@ -433,6 +434,14 @@ class TestHermesBackgroundTasks:
         assert refreshed["running"] is False
         assert refreshed["status"] == "finished"
 
+    def test_refresh_background_task_state_extracts_worktree_metadata(self, tmp_path):
+        log_path = tmp_path / "task.log"
+        log_path.write_text("✓ Worktree created: /tmp/repo/.worktrees/hermes-1234\n  Branch: hermes/hermes-1234\n")
+        task = {"id": "bg_1", "pid": None, "status": "finished", "running": False, "log_path": str(log_path)}
+        refreshed = _refresh_background_task_state(task)
+        assert refreshed["worktree_path"] == "/tmp/repo/.worktrees/hermes-1234"
+        assert refreshed["worktree_branch"] == "hermes/hermes-1234"
+
     def test_reads_quick_commands_from_profile_config(self, tmp_path):
         profile_home = tmp_path / "profile"
         profile_home.mkdir()
@@ -444,6 +453,61 @@ class TestHermesBackgroundTasks:
         )
         commands = _read_hermes_quick_commands(profile_home)
         assert commands == [{"name": "status", "type": "exec", "command": "echo ok"}]
+
+    def test_cleanup_worktree_removes_path(self, tmp_path, monkeypatch):
+        import main as main_mod
+
+        worktree_path = tmp_path / "repo" / ".worktrees" / "hermes-1234"
+        worktree_path.mkdir(parents=True)
+        registry_path = tmp_path / "tasks.json"
+        monkeypatch.setattr(main_mod, "HERMES_BACKGROUND_TASKS_PATH", registry_path)
+        monkeypatch.setattr(main_mod, "_resolve_repo_root", lambda repo_path: tmp_path / "repo")
+        registry_path.write_text(json.dumps([{
+            "id": "bg_1",
+            "running": False,
+            "status": "finished",
+            "mode": "worktree",
+            "repo_path": str(tmp_path / "repo"),
+            "worktree_path": str(worktree_path),
+        }]))
+
+        class _Proc:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        monkeypatch.setattr(main_mod.subprocess, "run", lambda *args, **kwargs: _Proc())
+
+        task = _cleanup_hermes_worktree("bg_1")
+        assert task is not None
+        assert task["status"] == "cleaned"
+
+    def test_cleanup_worktree_is_idempotent_when_already_removed(self, tmp_path, monkeypatch):
+        import main as main_mod
+
+        worktree_path = tmp_path / "repo" / ".worktrees" / "hermes-1234"
+        registry_path = tmp_path / "tasks.json"
+        monkeypatch.setattr(main_mod, "HERMES_BACKGROUND_TASKS_PATH", registry_path)
+        monkeypatch.setattr(main_mod, "_resolve_repo_root", lambda repo_path: tmp_path / "repo")
+        registry_path.write_text(json.dumps([{
+            "id": "bg_1",
+            "running": False,
+            "status": "finished",
+            "mode": "worktree",
+            "repo_path": str(tmp_path / "repo"),
+            "worktree_path": str(worktree_path),
+        }]))
+
+        class _ListProc:
+            returncode = 0
+            stdout = "worktree /tmp/repo\n"
+            stderr = ""
+
+        monkeypatch.setattr(main_mod.subprocess, "run", lambda *args, **kwargs: _ListProc())
+
+        task = _cleanup_hermes_worktree("bg_1")
+        assert task is not None
+        assert task["status"] == "cleaned"
 
 
 class TestAvailabilityEndpoint:

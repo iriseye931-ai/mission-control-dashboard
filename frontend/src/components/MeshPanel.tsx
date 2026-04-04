@@ -219,6 +219,7 @@ function HermesTab({
   const [backgroundWorktree, setBackgroundWorktree] = useState(false)
   const [backgroundBusy, setBackgroundBusy] = useState(false)
   const [backgroundStopBusy, setBackgroundStopBusy] = useState<string | null>(null)
+  const [backgroundCleanupBusy, setBackgroundCleanupBusy] = useState<string | null>(null)
   const [quickCommandBusy, setQuickCommandBusy] = useState<string | null>(null)
   const [auditEntries, setAuditEntries] = useState<PermissionAuditEntry[]>([])
   const [auditLoading, setAuditLoading] = useState(false)
@@ -419,6 +420,20 @@ function HermesTab({
       setTaskResult(err instanceof Error ? err.message : 'Background stop failed')
     } finally {
       setBackgroundStopBusy(null)
+    }
+  }
+
+  async function cleanupBackgroundTask(taskId: string) {
+    setBackgroundCleanupBusy(taskId)
+    try {
+      const res = await fetch(`/api/hermes/background/${taskId}/cleanup`, { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail ?? `Server error: ${res.status}`)
+      setTaskResult(`worktree cleaned: ${data.task.worktree_path ?? data.task.title}`)
+    } catch (err) {
+      setTaskResult(err instanceof Error ? err.message : 'Worktree cleanup failed')
+    } finally {
+      setBackgroundCleanupBusy(null)
     }
   }
 
@@ -709,6 +724,16 @@ function HermesTab({
                           <div style={{ fontSize: 8, color: '#64748b', fontFamily: 'monospace', lineHeight: 1.5 }}>
                             {task.profile} · {new Date(task.started_at).toLocaleString()}
                           </div>
+                          {task.worktree_path && (
+                            <div style={{ fontSize: 8, color: '#94a3b8', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                              {task.worktree_path}
+                            </div>
+                          )}
+                          {task.worktree_branch && (
+                            <div style={{ fontSize: 8, color: '#475569', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                              {task.worktree_branch}
+                            </div>
+                          )}
                           <div style={{ fontSize: 8, color: '#334155', fontFamily: 'monospace', lineHeight: 1.5 }}>
                             {task.prompt}
                           </div>
@@ -723,6 +748,16 @@ function HermesTab({
                                 style={{ fontSize: 8, padding: '3px 6px', borderRadius: 6, border: '1px solid #7f1d1d', background: backgroundStopBusy === task.id ? '#3f1d1d' : '#7f1d1d', color: '#fecaca', cursor: backgroundStopBusy === task.id ? 'not-allowed' : 'pointer', fontFamily: 'monospace' }}
                               >
                                 {backgroundStopBusy === task.id ? 'stopping' : 'stop'}
+                              </button>
+                            )}
+                            {!task.running && task.mode === 'worktree' && task.worktree_path && task.status !== 'cleaned' && (
+                              <button
+                                type="button"
+                                onClick={() => cleanupBackgroundTask(task.id)}
+                                disabled={backgroundCleanupBusy === task.id}
+                                style={{ fontSize: 8, padding: '3px 6px', borderRadius: 6, border: '1px solid #1e40af', background: backgroundCleanupBusy === task.id ? '#1e3a8a' : '#0f2b66', color: '#bfdbfe', cursor: backgroundCleanupBusy === task.id ? 'not-allowed' : 'pointer', fontFamily: 'monospace' }}
+                              >
+                                {backgroundCleanupBusy === task.id ? 'cleaning' : 'cleanup'}
                               </button>
                             )}
                           </div>

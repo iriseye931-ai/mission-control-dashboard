@@ -215,6 +215,9 @@ export interface HermesStatus {
     running: boolean
     mode?: string
     repo_path?: string | null
+    worktree_path?: string | null
+    worktree_branch?: string | null
+    worktree_cleaned_at?: string | null
     started_at: string
     ended_at?: string | null
   }[]
