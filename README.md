@@ -78,51 +78,46 @@ npm run dev
 
 ## Connecting your agents
 
-The backend polls your local services and broadcasts state over WebSocket. Push events directly from any agent via the REST API.
+The backend polls your local services, normalizes operator state, and broadcasts it over WebSocket. Agents and local tools can push structured events straight into the dashboard through the REST API.
 
-### Codex + Claude Inbox
+### Recommended integration model
 
-Mission Control now includes a shared local inbox so two terminals can coordinate through one file-backed channel:
+Mission Control works best when each tool keeps its own runtime and authentication model:
 
-- shared inbox file:
-  `~/.mesh/agent_inbox.jsonl`
-- terminal CLI:
-  [`backend/agent_inbox.py`](/Users/iris/Projects/mission-control-dashboard/backend/agent_inbox.py)
-- convenience wrappers:
-  [`backend/codex-listen.sh`](/Users/iris/Projects/mission-control-dashboard/backend/codex-listen.sh)
-  [`backend/claude-listen.sh`](/Users/iris/Projects/mission-control-dashboard/backend/claude-listen.sh)
-  [`backend/codex-read.sh`](/Users/iris/Projects/mission-control-dashboard/backend/codex-read.sh)
-  [`backend/claude-read.sh`](/Users/iris/Projects/mission-control-dashboard/backend/claude-read.sh)
-  [`backend/codex-send.sh`](/Users/iris/Projects/mission-control-dashboard/backend/codex-send.sh)
-  [`backend/claude-send.sh`](/Users/iris/Projects/mission-control-dashboard/backend/claude-send.sh)
+- `Claude Code` and `Codex` as installed subscription-backed CLIs
+- `Hermes` and `OpenClaw` as configured local agent runtimes
+- `OpenViking`, `Memory MCP`, and `MLX` as local infrastructure/services
 
-From the `backend/` directory:
+Mission Control does not replace those tools. It turns them into one operator surface.
 
-```bash
-./codex-listen.sh
-./claude-listen.sh
+### Live state the dashboard expects
 
-./codex-read.sh
-./claude-read.sh
+- agent status and progress events
+- service health and telemetry
+- memory recall activity and memory monitor logs
+- routing decisions and queue depth
+- cron/scheduled task freshness
+- local system pressure from the host machine
 
-./codex-send.sh --summary "Need a realism pass" --details "Own MeshGraph.tsx"
-./claude-send.sh --summary "Sphere pass complete" --files "frontend/src/components/MeshGraph.tsx"
-```
+### Current interface highlights
 
-Recommended split:
+![Mission Control Preview](assets/dashboard-preview.png)
 
-- Claude owns `frontend/src/components/MeshGraph.tsx`
-- Codex owns integration, HUD/layout, backend/tooling, and final verification
-- both agents send bounded handoffs through the inbox instead of copying text manually
+- permanent agent dock for Lead, Hermes, and IrisEye
+- cinematic mesh with clickable service and routing focus
+- top operator strip for service health, memory mode, and alerts
+- memory cause and routing impact surfaced directly in the main view
 
-**From Python (any agent):**
+**From Python (send a direct agent message):**
 ```python
 import httpx
 
-httpx.post("http://localhost:8000/api/event", json={
-    "event_type": "progress_update",
-    "source": "my-agent",
-    "data": {"agent_id": "my-agent", "progress": 72, "task": "processing data"}
+httpx.post("http://localhost:8000/api/agent-messages", json={
+    "from_agent": "hermes",
+    "to_agent": "atlas",
+    "summary": "Memory route degraded",
+    "details": "Gateway degraded. Recommend local fallback until Memory MCP recovers.",
+    "files": ["backend/main.py"]
 })
 ```
 
@@ -132,27 +127,30 @@ const ws = new WebSocket("ws://localhost:8000/ws");
 ws.onmessage = (e) => console.log(JSON.parse(e.data)); // full mesh state on every update
 ```
 
-**Event types:**
-| Event | Payload | Use for |
-|-------|---------|---------|
-| `thought` | `{agent_id, content}` | Agent reasoning steps |
-| `tool_call` | `{agent_id, tool, args}` | Tool invocations |
-| `tool_result` | `{agent_id, tool, result}` | Tool outputs |
-| `progress_update` | `{agent_id, progress, task}` | Task progress 0–100 |
-| `output_chunk` | `{agent_id, content}` | Streamed output |
-| `task_assigned` | `{agent_id, task}` | New task assignment |
-| `system_metric` | `{metric, value}` | System-wide metrics |
+**Direct messaging payload:**
+| Field | Type | Use for |
+|-------|------|---------|
+| `from_agent` | `string` | Source agent/tool |
+| `to_agent` | `string` | Target agent/tool |
+| `summary` | `string` | Short operator-readable subject |
+| `details` | `string` | Optional body text |
+| `files` | `string[]` | Optional related file paths |
 
 **REST API:**
 ```
 GET  /api/health        — health check
 GET  /api/agents        — active agents + status
+GET  /api/status        — full dashboard state snapshot
+GET  /api/routing       — current routing summary
 GET  /api/system        — CPU, RAM, MLX RAM, PID
 GET  /api/logs          — recent log buffer
 GET  /api/cron          — Hermes scheduled jobs
 GET  /api/memories      — recent memory recalls
+GET  /api/memory-events — normalized memory event stream
 GET  /api/amp/messages  — AMP messages from AI Maestro
 GET  /api/amp/events    — live routing events from bridge logs
+GET  /api/agent-messages — direct agent-to-agent message history
+POST /api/agent-messages — send a direct agent-to-agent message
 POST /api/amp/send      — send AMP message to any agent
 ```
 
@@ -205,6 +203,14 @@ premium      -> atlas (fallback: claude)
 ```
 
 Premium capacity should be reserved for planning, ambiguous debugging, tricky refactors, and final review.
+
+---
+
+## Public repo notes
+
+- the README screenshots are captured from the live local dashboard, not static mockups
+- the public repo focuses on the dashboard, backend polling, memory/routing state, and operator UI
+- local experimental agent wrapper scripts are intentionally not part of the committed dashboard product surface
 
 ---
 
