@@ -231,6 +231,15 @@ def _parse_iso_datetime(iso_str: str | None) -> datetime | None:
         return None
 
 
+def _iso_from_timestamp(value: float | int | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat()
+    except Exception:
+        return None
+
+
 def _activity_summary(iso_str: str | None) -> tuple[str, int | None]:
     """Return an activity freshness label and age in seconds."""
     dt = _parse_iso_datetime(iso_str)
@@ -549,6 +558,7 @@ def _enrich_local_profile(agent_name: str, profile: dict[str, Any]) -> dict[str,
         enriched["gateway_status"] = gateway_state.get("status")
         enriched["runtime"] = "hermes-profile"
         enriched["display_name"] = str(profile.get("display_name") or hermes_profile)
+        enriched["session_overview"] = _fetch_hermes_profile_session_overview(profile_home, hermes_profile)
         return enriched
     model_path = _resolve_profile_model(profile)
     pid_path = _profile_pid_path(agent_name, str(profile.get("name", "")))
@@ -607,6 +617,136 @@ def _read_hermes_profile_model(profile_home: Path) -> dict[str, str | None]:
         "model": _match(r"^  model:\s*(.+)$"),
         "provider": _match(r"^  provider:\s*(.+)$"),
         "base_url": _match(r"^  base_url:\s*(.+)$"),
+    }
+
+
+def _fetch_hermes_profile_session_overview(profile_home: Path, profile_name: str) -> dict[str, Any]:
+    db_path = profile_home / "state.db"
+    sessions_dir = profile_home / "sessions"
+    overview: dict[str, Any] = {
+        "profile": profile_name,
+        "session_count": 0,
+        "search_ready": False,
+        "latest_session_id": None,
+        "latest_title": None,
+        "latest_source": None,
+        "latest_model": None,
+        "latest_started_at": None,
+        "latest_ended_at": None,
+        "latest_updated_at": None,
+        "latest_message_count": None,
+        "resume_target": None,
+    }
+
+    if db_path.exists():
+        try:
+            with sqlite3.connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                overview["search_ready"] = "messages_fts" in tables
+                row = conn.execute(
+                    """
+                    SELECT
+                        COUNT(*) AS total_sessions,
+                        MAX(COALESCE(ended_at, started_at)) AS latest_ts
+                    FROM sessions
+                    """
+                ).fetchone()
+                if row:
+                    overview["session_count"] = int(row["total_sessions"] or 0)
+                    overview["latest_updated_at"] = _iso_from_timestamp(row["latest_ts"])
+
+                latest = conn.execute(
+                    """
+                    SELECT id, title, source, model, started_at, ended_at, message_count
+                    FROM sessions
+                    ORDER BY started_at DESC
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if latest:
+                    latest_title = (latest["title"] or "").strip() or None
+                    overview.update({
+                        "latest_session_id": latest["id"],
+                        "latest_title": latest_title,
+                        "latest_source": latest["source"],
+                        "latest_model": latest["model"],
+                        "latest_started_at": _iso_from_timestamp(latest["started_at"]),
+                        "latest_ended_at": _iso_from_timestamp(latest["ended_at"]),
+                        "latest_message_count": latest["message_count"],
+                        "resume_target": latest_title or latest["id"],
+                    })
+                return overview
+        except Exception:
+            pass
+
+    try:
+        session_files = sorted(
+            [path for path in sessions_dir.glob("session_*.json") if path.is_file()],
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+    except Exception:
+        session_files = []
+
+    overview["session_count"] = len(session_files)
+    if not session_files:
+        return overview
+
+    latest_file = session_files[0]
+    try:
+        latest = json.loads(latest_file.read_text(errors="replace"))
+    except Exception:
+        latest = {}
+
+    latest_title = str(latest.get("title") or "").strip() or None
+    latest_session_id = latest.get("session_id") or latest_file.stem.removeprefix("session_")
+    overview.update({
+        "latest_session_id": latest_session_id,
+        "latest_title": latest_title,
+        "latest_source": latest.get("platform"),
+        "latest_model": latest.get("model"),
+        "latest_started_at": latest.get("session_start"),
+        "latest_ended_at": latest.get("ended_at"),
+        "latest_updated_at": latest.get("last_updated") or _iso_from_timestamp(latest_file.stat().st_mtime),
+        "resume_target": latest_title or latest_session_id,
+    })
+    return overview
+
+
+def _fetch_hermes_sessions_overview() -> dict[str, Any]:
+    profiles = ["default"]
+    try:
+        if HERMES_PROFILES_DIR.exists():
+            profiles.extend(sorted(path.name for path in HERMES_PROFILES_DIR.iterdir() if path.is_dir()))
+    except Exception:
+        pass
+
+    per_profile = [_fetch_hermes_profile_session_overview(_hermes_profile_home(name), name) for name in profiles]
+    total_sessions = sum(int(item.get("session_count") or 0) for item in per_profile)
+    latest = next(
+        (
+            item for item in sorted(
+                per_profile,
+                key=lambda entry: _parse_iso_datetime(entry.get("latest_updated_at")) or datetime.min.replace(tzinfo=timezone.utc),
+                reverse=True,
+            )
+            if item.get("latest_updated_at")
+        ),
+        None,
+    )
+    active_profiles = sum(1 for item in per_profile if int(item.get("session_count") or 0) > 0)
+    return {
+        "profiles": per_profile,
+        "profile_count": len(per_profile),
+        "active_profiles": active_profiles,
+        "session_count": total_sessions,
+        "search_ready": any(bool(item.get("search_ready")) for item in per_profile),
+        "latest_title": (latest or {}).get("latest_title"),
+        "latest_profile": (latest or {}).get("profile"),
+        "latest_source": (latest or {}).get("latest_source"),
+        "latest_updated_at": (latest or {}).get("latest_updated_at"),
+        "resume_target": (latest or {}).get("resume_target"),
     }
 
 
@@ -1606,6 +1746,7 @@ def _fetch_amp_messages() -> list[dict]:
 
 def _fetch_hermes_status() -> dict:
     """Get latest Hermes session info."""
+    sessions_overview = _fetch_hermes_sessions_overview()
     try:
         sessions = sorted(
             [f for f in HERMES_SESSIONS_DIR.glob("session_*.json") if "request_dump" not in f.name],
@@ -1613,7 +1754,12 @@ def _fetch_hermes_status() -> dict:
             reverse=True,
         )
         if not sessions:
-            return {"status": "no sessions"}
+            return {
+                "status": "no sessions",
+                "sessions": sessions_overview,
+                "session_count": sessions_overview.get("session_count", 0),
+                "search_ready": sessions_overview.get("search_ready", False),
+            }
         latest = json.loads(sessions[0].read_text())
         return {
             "session_id": sessions[0].stem,
@@ -1622,9 +1768,22 @@ def _fetch_hermes_status() -> dict:
             "task": latest.get("task", latest.get("taskDescription")),
             "created_at": latest.get("created_at", ""),
             "modified": sessions[0].stat().st_mtime,
+            "session_count": sessions_overview.get("session_count", 0),
+            "search_ready": sessions_overview.get("search_ready", False),
+            "resume_target": sessions_overview.get("resume_target"),
+            "latest_title": sessions_overview.get("latest_title"),
+            "latest_profile": sessions_overview.get("latest_profile"),
+            "latest_source": sessions_overview.get("latest_source"),
+            "latest_updated_at": sessions_overview.get("latest_updated_at"),
+            "sessions": sessions_overview,
         }
     except Exception:
-        return {"status": "unavailable"}
+        return {
+            "status": "unavailable",
+            "sessions": sessions_overview,
+            "session_count": sessions_overview.get("session_count", 0),
+            "search_ready": sessions_overview.get("search_ready", False),
+        }
 
 
 def _fetch_memory_monitor_log(n: int = 50) -> list[str]:

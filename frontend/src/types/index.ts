@@ -57,6 +57,20 @@ export interface Agent {
     alias_path?: string | null
     alias_installed?: boolean
     gateway_status?: string
+    session_overview?: {
+      profile: string
+      session_count: number
+      search_ready: boolean
+      latest_session_id?: string | null
+      latest_title?: string | null
+      latest_source?: string | null
+      latest_model?: string | null
+      latest_started_at?: string | null
+      latest_ended_at?: string | null
+      latest_updated_at?: string | null
+      latest_message_count?: number | null
+      resume_target?: string | null
+    }
   }[]
 }
 
@@ -176,6 +190,38 @@ export interface HermesStatus {
   task?: string
   created_at?: string
   modified?: number
+  session_count?: number
+  search_ready?: boolean
+  resume_target?: string | null
+  latest_title?: string | null
+  latest_profile?: string | null
+  latest_source?: string | null
+  latest_updated_at?: string | null
+  sessions?: {
+    profiles: {
+      profile: string
+      session_count: number
+      search_ready: boolean
+      latest_session_id?: string | null
+      latest_title?: string | null
+      latest_source?: string | null
+      latest_model?: string | null
+      latest_started_at?: string | null
+      latest_ended_at?: string | null
+      latest_updated_at?: string | null
+      latest_message_count?: number | null
+      resume_target?: string | null
+    }[]
+    profile_count: number
+    active_profiles: number
+    session_count: number
+    search_ready: boolean
+    latest_title?: string | null
+    latest_profile?: string | null
+    latest_source?: string | null
+    latest_updated_at?: string | null
+    resume_target?: string | null
+  }
 }
 
 export interface RoutingSummary {

@@ -1338,6 +1338,12 @@ export default function MeshGraph({
               const hermesProfileSummary = hermesNativeProfiles.length > 0
                 ? `${hermesRunningProfiles}/${hermesNativeProfiles.length}`
                 : null
+              const hermesSessionCount = agentKey === 'hermes'
+                ? hermesNativeProfiles.reduce((sum, profile) => sum + (profile.session_overview?.session_count ?? 0), 0)
+                : null
+              const hermesLatestTitle = agentKey === 'hermes'
+                ? hermesNativeProfiles.find((profile) => profile.session_overview?.latest_title)?.session_overview?.latest_title
+                : null
 
               return (
                 <div
@@ -1399,12 +1405,28 @@ export default function MeshGraph({
                         </span>
                       </div>
                     )}
+                    {agentKey === 'hermes' && hermesSessionCount != null && (
+                      <div style={{ display:'grid', gridTemplateColumns: '72px minmax(0, 1fr)', gap: 10, alignItems: 'start' }}>
+                        <span style={{ fontSize: 9, color: 'rgba(150,200,220,0.44)', letterSpacing:'0.14em', textTransform:'uppercase' }}>Sessions</span>
+                        <span style={{ fontSize: 12, color: isFocused ? '#effcff' : '#c8eaf8', textAlign: 'right', minWidth: 0, lineHeight: 1.4, whiteSpace: 'normal', wordBreak: 'break-word' }}>
+                          {hermesSessionCount} tracked
+                        </span>
+                      </div>
+                    )}
                     {taskSummary && (
                       <div style={{ marginTop: 5, padding: '10px 11px', border: isFocused ? `1px solid rgba(${accentRgb},0.16)` : '1px solid rgba(100,210,255,0.1)', background: isFocused ? `rgba(${accentRgb},0.05)` : 'rgba(255,255,255,0.025)' }}>
                         <div style={{ fontSize: 9, color: isFocused ? accent : 'rgba(150,220,255,0.5)', letterSpacing: '0.18em', textTransform: 'uppercase', marginBottom: 6 }}>
                           Current Task
                         </div>
                         <div style={{ fontSize: 12, color: isFocused ? '#f2fbff' : 'rgba(202,234,245,0.82)', lineHeight: 1.55 }}>{taskSummary}</div>
+                      </div>
+                    )}
+                    {agentKey === 'hermes' && hermesLatestTitle && !taskSummary && (
+                      <div style={{ marginTop: 5, padding: '10px 11px', border: isFocused ? `1px solid rgba(${accentRgb},0.16)` : '1px solid rgba(100,210,255,0.1)', background: isFocused ? `rgba(${accentRgb},0.05)` : 'rgba(255,255,255,0.025)' }}>
+                        <div style={{ fontSize: 9, color: isFocused ? accent : 'rgba(150,220,255,0.5)', letterSpacing: '0.18em', textTransform: 'uppercase', marginBottom: 6 }}>
+                          Latest Session
+                        </div>
+                        <div style={{ fontSize: 12, color: isFocused ? '#f2fbff' : 'rgba(202,234,245,0.82)', lineHeight: 1.55 }}>{hermesLatestTitle}</div>
                       </div>
                     )}
                   </div>

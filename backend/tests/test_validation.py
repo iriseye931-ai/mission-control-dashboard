@@ -4,6 +4,8 @@ Tests for input validation: AMP send, RAG upload, and core API endpoints.
 import io
 import sys
 import os
+import json
+import sqlite3
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
@@ -20,6 +22,8 @@ from main import (
     _RAG_MAX_FILE_BYTES,
     _RAG_ALLOWED_EXT,
     _finalize_agents,
+    _fetch_hermes_profile_session_overview,
+    _fetch_hermes_sessions_overview,
     _recommend_route,
 )
 
@@ -307,6 +311,105 @@ class TestTaskSubmitEndpoint:
         assert r.status_code == 200
         data = r.json()
         assert data["status"] == "deferred"
+
+
+class TestHermesSessions:
+    def test_profile_session_overview_reads_sqlite_store(self, tmp_path):
+        profile_home = tmp_path / "default"
+        profile_home.mkdir()
+        db_path = profile_home / "state.db"
+        with sqlite3.connect(db_path) as conn:
+            conn.executescript(
+                """
+                CREATE TABLE sessions (
+                    id TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    started_at REAL NOT NULL,
+                    ended_at REAL,
+                    message_count INTEGER DEFAULT 0,
+                    title TEXT,
+                    model TEXT
+                );
+                CREATE VIRTUAL TABLE messages_fts USING fts5(content);
+                """
+            )
+            conn.execute(
+                "INSERT INTO sessions (id, source, started_at, ended_at, message_count, title, model) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                ("sess-1", "cli", 1000.0, 1010.0, 12, "mesh reasoning review", "qwen"),
+            )
+
+        overview = _fetch_hermes_profile_session_overview(profile_home, "default")
+        assert overview["session_count"] == 1
+        assert overview["search_ready"] is True
+        assert overview["latest_title"] == "mesh reasoning review"
+        assert overview["resume_target"] == "mesh reasoning review"
+
+    def test_profile_session_overview_falls_back_to_session_files(self, tmp_path):
+        profile_home = tmp_path / "mesh-sidecar"
+        sessions_dir = profile_home / "sessions"
+        sessions_dir.mkdir(parents=True)
+        session_file = sessions_dir / "session_20260404_sidecar.json"
+        session_file.write_text(json.dumps({
+            "session_id": "20260404_sidecar",
+            "title": "sidecar digest",
+            "platform": "cli",
+            "model": "qwen2.5",
+            "session_start": "2026-04-04T05:00:00+00:00",
+            "last_updated": "2026-04-04T05:05:00+00:00",
+        }))
+
+        overview = _fetch_hermes_profile_session_overview(profile_home, "mesh-sidecar")
+        assert overview["session_count"] == 1
+        assert overview["search_ready"] is False
+        assert overview["latest_title"] == "sidecar digest"
+        assert overview["resume_target"] == "sidecar digest"
+
+    def test_sessions_overview_aggregates_profiles(self, tmp_path, monkeypatch):
+        import main as main_mod
+
+        hermes_home = tmp_path / ".hermes"
+        profiles_dir = hermes_home / "profiles"
+        default_home = hermes_home
+        sidecar_home = profiles_dir / "mesh-sidecar"
+        sidecar_sessions = sidecar_home / "sessions"
+        profiles_dir.mkdir(parents=True)
+        sidecar_sessions.mkdir(parents=True)
+
+        default_db = default_home / "state.db"
+        with sqlite3.connect(default_db) as conn:
+            conn.executescript(
+                """
+                CREATE TABLE sessions (
+                    id TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    started_at REAL NOT NULL,
+                    ended_at REAL,
+                    message_count INTEGER DEFAULT 0,
+                    title TEXT,
+                    model TEXT
+                );
+                CREATE VIRTUAL TABLE messages_fts USING fts5(content);
+                """
+            )
+            conn.execute(
+                "INSERT INTO sessions (id, source, started_at, ended_at, message_count, title, model) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                ("sess-1", "cli", 1000.0, 1020.0, 18, "default run", "qwen"),
+            )
+        (sidecar_sessions / "session_1.json").write_text(json.dumps({
+            "session_id": "s1",
+            "title": "sidecar digest",
+            "platform": "cli",
+            "last_updated": "2026-04-04T05:05:00+00:00",
+        }))
+
+        monkeypatch.setattr(main_mod, "HERMES_HOME", hermes_home)
+        monkeypatch.setattr(main_mod, "HERMES_PROFILES_DIR", profiles_dir)
+
+        overview = _fetch_hermes_sessions_overview()
+        assert overview["session_count"] == 2
+        assert overview["profile_count"] == 2
+        assert overview["active_profiles"] == 2
+        assert overview["search_ready"] is True
 
 
 class TestAvailabilityEndpoint:

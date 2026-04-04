@@ -273,6 +273,7 @@ function HermesTab({
   }, [focus, agents])
 
   const showSession = status && status.status !== 'unavailable' && status.status !== 'no sessions'
+  const sessionProfiles = status?.sessions?.profiles ?? []
   const focusedAgent = focus?.type === 'agent'
     ? agents.find((agent) => (agent.name ?? '').toLowerCase().replace(/\s+/g, '-') === focus.key)
     : null
@@ -281,6 +282,10 @@ function HermesTab({
   const fields: [string, string | number | undefined | null][] = showSession ? [
     ['Status', status?.status],
     ['Session', status?.session_id],
+    ['Resume', status?.resume_target],
+    ['Title', status?.latest_title],
+    ['Profile', status?.latest_profile],
+    ['Source', status?.latest_source],
     ['Model', status?.model],
     ['Task', status?.task],
     ['Created', status?.created_at ? new Date(status.created_at).toLocaleString() : undefined],
@@ -521,9 +526,15 @@ function HermesTab({
 
           <div>
             <SectionTitle>Session</SectionTitle>
-            {showSession ? (
+            {(showSession || sessionProfiles.length > 0) ? (
               <PanelCard compact>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 8 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8 }}>
+                  <MiniStat label="sessions" value={status?.session_count ?? 0} tone="#67e8f9" />
+                  <MiniStat label="profiles" value={`${status?.sessions?.active_profiles ?? 0}/${status?.sessions?.profile_count ?? 0}`} tone="#a78bfa" />
+                  <MiniStat label="search" value={status?.search_ready ? 'ready' : 'idle'} tone={status?.search_ready ? '#10b981' : '#94a3b8'} />
+                </div>
+                {showSession && (
+                  <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 8 }}>
                   {fields.filter(([, v]) => v != null && v !== '').map(([label, value]) => (
                     <div key={label}>
                       <div style={{ fontSize: 8, color: '#475569', fontFamily: 'monospace', textTransform: 'uppercase' }}>
@@ -534,7 +545,33 @@ function HermesTab({
                       </div>
                     </div>
                   ))}
-                </div>
+                  </div>
+                )}
+                {sessionProfiles.length > 0 && (
+                  <div style={{ marginTop: 10, display: 'grid', gap: 6 }}>
+                    <div style={{ fontSize: 8, color: '#475569', fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: '0.12em' }}>
+                      profile sessions
+                    </div>
+                    {sessionProfiles.map((profile) => (
+                      <div key={profile.profile} style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.7fr 1fr', gap: 8, alignItems: 'start', padding: '7px 0', borderTop: '1px solid rgba(15,23,42,0.45)' }}>
+                        <div>
+                          <div style={{ fontSize: 9, color: '#cbd5e1', fontFamily: 'monospace' }}>{profile.profile}</div>
+                          <div style={{ marginTop: 3, fontSize: 8, color: '#64748b', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                            {profile.latest_title ?? profile.resume_target ?? 'no sessions yet'}
+                          </div>
+                        </div>
+                        <div style={{ fontSize: 8, color: '#94a3b8', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                          {profile.session_count} sess
+                          <br />
+                          {profile.search_ready ? 'fts ready' : 'no fts'}
+                        </div>
+                        <div style={{ fontSize: 8, color: '#475569', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                          {profile.latest_updated_at ? new Date(profile.latest_updated_at).toLocaleString() : 'idle'}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </PanelCard>
             ) : (
               <p style={{ fontSize: 10, color: '#334155' }}>No active Hermes session</p>
