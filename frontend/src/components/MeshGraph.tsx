@@ -129,6 +129,43 @@ function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(value, max))
 }
 
+function agentSignature(key: string) {
+  switch (key) {
+    case 'atlas':
+      return {
+        cadence: 0.9,
+        orbitA: 1.04,
+        orbitB: 0.72,
+        halo: 0.22,
+        shell: 'command' as const,
+      }
+    case 'hermes':
+      return {
+        cadence: 1.35,
+        orbitA: 1.3,
+        orbitB: 0.94,
+        halo: 0.18,
+        shell: 'relay' as const,
+      }
+    case 'iriseye':
+      return {
+        cadence: 1.08,
+        orbitA: 0.86,
+        orbitB: 1.22,
+        halo: 0.2,
+        shell: 'sensor' as const,
+      }
+    default:
+      return {
+        cadence: 1,
+        orbitA: 1,
+        orbitB: 1,
+        halo: 0.18,
+        shell: 'relay' as const,
+      }
+  }
+}
+
 function panelPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, cut: number) {
   ctx.beginPath()
   ctx.moveTo(x + cut, y)
@@ -924,13 +961,19 @@ export default function MeshGraph({
           return
         }
 
-        const pulse = 0.5 + 0.5 * Math.sin(t * 2.4 + item.node.key.length)
-        const orbitPhase = t * (item.node.key === 'atlas' ? 0.95 : 1.25) + item.node.key.length * 0.7
-        const orbitRadius = item.node.radius + 10 + pulse * 3
-        const orbitRadiusB = item.node.radius + 15 + pulse * 2.5
+        const sig = agentSignature(item.node.key)
+        const statusRaw = (item.status || '').toLowerCase()
+        const isDegradedNode = statusRaw.includes('degraded') || statusRaw.includes('partial')
+        const isOfflineNode = !item.active && !isDegradedNode
+        const statusCadence = isOfflineNode ? 0.22 : isDegradedNode ? 1.9 : sig.cadence
+        const pulse = 0.5 + 0.5 * Math.sin(t * 2.4 * statusCadence + item.node.key.length)
+        const orbitPhase = t * (item.node.key === 'atlas' ? 0.95 : 1.25) * statusCadence + item.node.key.length * 0.7
+        const orbitRadius = item.node.radius + 10 + pulse * 3 * sig.orbitA
+        const orbitRadiusB = item.node.radius + 15 + pulse * 2.5 * sig.orbitB
+        const jitter = isDegradedNode ? Math.sin(t * 8 + item.node.key.length * 0.9) * 1.4 : 0
         if (item.active) {
           const halo = ctx.createRadialGradient(item.node.x, item.node.y, item.node.radius * 0.2, item.node.x, item.node.y, item.node.radius * 1.8)
-          halo.addColorStop(0, `rgba(${hexToRgb(item.color)},0.2)`)
+          halo.addColorStop(0, `rgba(${hexToRgb(item.color)},${sig.halo})`)
           halo.addColorStop(0.55, `rgba(${hexToRgb(item.color)},0.08)`)
           halo.addColorStop(1, 'rgba(0,0,0,0)')
           ctx.fillStyle = halo
@@ -945,13 +988,13 @@ export default function MeshGraph({
           ctx.stroke()
 
           ctx.beginPath()
-          ctx.arc(item.node.x, item.node.y, orbitRadius, orbitPhase, orbitPhase + Math.PI * 1.18)
+          ctx.arc(item.node.x, item.node.y, orbitRadius, orbitPhase, orbitPhase + Math.PI * (item.node.key === 'atlas' ? 0.84 : 1.18))
           ctx.strokeStyle = `rgba(${hexToRgb(item.color)},0.22)`
           ctx.lineWidth = 1
           ctx.stroke()
 
           ctx.beginPath()
-          ctx.arc(item.node.x, item.node.y, orbitRadiusB, -orbitPhase * 0.8, -orbitPhase * 0.8 + Math.PI * 0.86)
+          ctx.arc(item.node.x, item.node.y, orbitRadiusB, -orbitPhase * 0.8, -orbitPhase * 0.8 + Math.PI * (item.node.key === 'iriseye' ? 0.52 : 0.86))
           ctx.strokeStyle = `rgba(${hexToRgb(item.color)},0.14)`
           ctx.lineWidth = 0.8
           ctx.stroke()
@@ -976,6 +1019,14 @@ export default function MeshGraph({
           ctx.beginPath()
           ctx.arc(orbiterX2, orbiterY2, 1.2, 0, Math.PI * 2)
           ctx.fill()
+        } else if (isDegradedNode) {
+          ctx.beginPath()
+          ctx.arc(item.node.x + jitter, item.node.y - jitter * 0.4, item.node.radius + 5 + pulse * 2, 0, Math.PI * 2)
+          ctx.strokeStyle = `rgba(${hexToRgb(item.color)},0.12)`
+          ctx.lineWidth = 0.9
+          ctx.setLineDash([3, 6])
+          ctx.stroke()
+          ctx.setLineDash([])
         }
 
         const nodeFill = ctx.createRadialGradient(
@@ -1021,24 +1072,67 @@ export default function MeshGraph({
         ctx.strokeStyle = `rgba(${hexToRgb(item.color)},${item.active ? 0.4 : 0.12})`
         ctx.lineWidth = 1
         ctx.stroke()
-        ctx.beginPath()
-        ctx.moveTo(item.node.x - item.node.radius * 0.55, item.node.y)
-        ctx.lineTo(item.node.x + item.node.radius * 0.55, item.node.y)
-        ctx.moveTo(item.node.x, item.node.y - item.node.radius * 0.55)
-        ctx.lineTo(item.node.x, item.node.y + item.node.radius * 0.55)
-        ctx.strokeStyle = `rgba(${hexToRgb(item.color)},${item.active ? 0.28 : 0.08})`
-        ctx.stroke()
+        ctx.strokeStyle = `rgba(${hexToRgb(item.color)},${item.active ? 0.28 : isDegradedNode ? 0.12 : 0.05})`
+        if (sig.shell === 'command') {
+          ctx.beginPath()
+          ctx.moveTo(item.node.x - item.node.radius * 0.55, item.node.y)
+          ctx.lineTo(item.node.x + item.node.radius * 0.55, item.node.y)
+          ctx.moveTo(item.node.x, item.node.y - item.node.radius * 0.55)
+          ctx.lineTo(item.node.x, item.node.y + item.node.radius * 0.55)
+          ctx.stroke()
+          ctx.beginPath()
+          ctx.rect(item.node.x - item.node.radius * 0.22, item.node.y - item.node.radius * 0.22, item.node.radius * 0.44, item.node.radius * 0.44)
+          ctx.stroke()
+        } else if (sig.shell === 'relay') {
+          ctx.beginPath()
+          ctx.arc(item.node.x, item.node.y, item.node.radius * 0.58, -Math.PI * 0.22, Math.PI * 1.22)
+          ctx.stroke()
+          ctx.beginPath()
+          ctx.arc(item.node.x, item.node.y, item.node.radius * 0.26, 0, Math.PI * 2)
+          ctx.stroke()
+        } else if (sig.shell === 'sensor') {
+          ctx.beginPath()
+          ctx.ellipse(item.node.x, item.node.y, item.node.radius * 0.56, item.node.radius * 0.32, 0, 0, Math.PI * 2)
+          ctx.stroke()
+          ctx.beginPath()
+          ctx.moveTo(item.node.x - item.node.radius * 0.52, item.node.y)
+          ctx.lineTo(item.node.x + item.node.radius * 0.52, item.node.y)
+          ctx.stroke()
+          ctx.beginPath()
+          ctx.arc(item.node.x, item.node.y, item.node.radius * 0.12, 0, Math.PI * 2)
+          ctx.stroke()
+        }
 
         if (focused) {
           const reticleRadius = item.node.radius * 2.2 + pulse * 1.5
-          const bracketArc = Math.PI * 0.12
           ctx.strokeStyle = `rgba(${hexToRgb(item.color)},0.42)`
           ctx.lineWidth = 1.2
-          ;[0, Math.PI / 2, Math.PI, Math.PI * 1.5].forEach((angle) => {
+          if (sig.shell === 'command') {
             ctx.beginPath()
-            ctx.arc(item.node.x, item.node.y, reticleRadius, angle - bracketArc, angle + bracketArc)
+            ctx.rect(item.node.x - reticleRadius, item.node.y - reticleRadius, reticleRadius * 2, reticleRadius * 2)
             ctx.stroke()
-          })
+            ctx.beginPath()
+            ctx.moveTo(item.node.x - reticleRadius * 1.15, item.node.y)
+            ctx.lineTo(item.node.x + reticleRadius * 1.15, item.node.y)
+            ctx.moveTo(item.node.x, item.node.y - reticleRadius * 1.15)
+            ctx.lineTo(item.node.x, item.node.y + reticleRadius * 1.15)
+            ctx.stroke()
+          } else if (sig.shell === 'relay') {
+            const bracketArc = Math.PI * 0.12
+            ;[0, Math.PI / 2, Math.PI, Math.PI * 1.5].forEach((angle) => {
+              ctx.beginPath()
+              ctx.arc(item.node.x, item.node.y, reticleRadius, angle - bracketArc, angle + bracketArc)
+              ctx.stroke()
+            })
+          } else {
+            ctx.beginPath()
+            ctx.ellipse(item.node.x, item.node.y, reticleRadius * 1.04, reticleRadius * 0.62, 0, 0, Math.PI * 2)
+            ctx.stroke()
+            ctx.beginPath()
+            ctx.moveTo(item.node.x - reticleRadius * 0.9, item.node.y)
+            ctx.lineTo(item.node.x + reticleRadius * 0.9, item.node.y)
+            ctx.stroke()
+          }
           ctx.fillStyle = 'rgba(8,8,8,0.92)'
           ctx.fillRect(item.node.x - 34 * item.scale, item.node.y + item.node.radius + 10, 68 * item.scale, 10 * item.scale)
           ctx.strokeStyle = `rgba(${hexToRgb(item.color)},0.24)`
