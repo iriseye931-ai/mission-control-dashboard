@@ -300,7 +300,7 @@ function HermesTab({
       })
       const data = await res.json()
       if (!res.ok) throw new Error(`Server error: ${res.status}`)
-      setTaskResult(`${data.status}: ${data.task_class} -> ${data.recommended_agent}${data.recommended_profile ? ` [${data.recommended_profile}]` : ''}${data.fallback_agent ? ` (fallback ${data.fallback_agent})` : ''}`)
+      setTaskResult(`${data.status}: ${data.task_class} -> ${data.recommended_agent}${(data.recommended_profile_display ?? data.recommended_profile) ? ` [${data.recommended_profile_display ?? data.recommended_profile}]` : ''}${data.fallback_agent ? ` (fallback ${data.fallback_agent})` : ''}`)
     } catch (err) {
       setTaskResult(err instanceof Error ? err.message : 'Task routing failed')
     } finally {

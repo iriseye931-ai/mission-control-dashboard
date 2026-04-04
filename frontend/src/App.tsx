@@ -351,7 +351,7 @@ function OpsStrip({ onSelect }: { onSelect: (selection: GraphSelection) => void 
         onClick={() => onSelect({ type: 'agent', key: (routingSummary?.guidance?.memory_heavy ?? 'hermes').toLowerCase(), label: routingSummary?.guidance?.memory_heavy ?? 'Hermes' })}
         style={{ fontSize: 11, color: C.soft, letterSpacing: '0.1em', textTransform: 'uppercase', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }}
       >
-        Route {routingSummary?.guidance?.memory_heavy ?? '—'}
+        Route {routingSummary?.guidance?.memory_heavy ?? '—'}{routingSummary?.guidance?.memory_heavy?.toLowerCase() === 'hermes' && routingSummary?.profile_guidance?.memory_heavy ? ` · ${routingSummary.profile_guidance.memory_heavy}` : ''}
       </button>
     </div>
   )

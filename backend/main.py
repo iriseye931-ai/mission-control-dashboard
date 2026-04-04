@@ -299,6 +299,8 @@ def _build_routing_summary(
     routine_agent = (local_default or {}).get("name") or "hermes"
     specialized_agent = specialized[0].get("name") if specialized else routine_agent
     premium_agent = available_premium[0].get("name") if available_premium else (premium_pool[0].get("name") if premium_pool else "atlas")
+    hermes_profiles = (local_default or {}).get("local_profiles") if (local_default or {}).get("name") == "hermes" else []
+    profile_guidance = _preferred_hermes_profile_guidance(hermes_profiles or [])
     return {
         "policy": "local-first",
         "premium_pool": [a.get("name") for a in premium_pool],
@@ -316,6 +318,13 @@ def _build_routing_summary(
             "specialized": specialized_agent,
             "premium": premium_agent,
             "memory_heavy": routine_agent if memory_ready or memory_mode == "pressure" else premium_agent,
+        },
+        "profile_guidance": {
+            "routine": profile_guidance.get("routine"),
+            "summary": profile_guidance.get("summary"),
+            "reasoning": profile_guidance.get("reasoning"),
+            "code": profile_guidance.get("code"),
+            "memory_heavy": profile_guidance.get("routine") if memory_ready or memory_mode == "pressure" else None,
         },
     }
 
@@ -625,6 +634,35 @@ def _discover_hermes_native_profiles() -> list[dict[str, Any]]:
     return profiles
 
 
+def _find_hermes_profile(
+    profiles: list[dict[str, Any]],
+    *names: str,
+) -> dict[str, Any] | None:
+    wanted = {name.strip().lower() for name in names if name.strip()}
+    for profile in profiles:
+        candidates = {
+            str(profile.get("name") or "").strip().lower(),
+            str(profile.get("display_name") or "").strip().lower(),
+            str(profile.get("hermes_profile") or "").strip().lower(),
+        }
+        if wanted & candidates:
+            return profile
+    return None
+
+
+def _preferred_hermes_profile_guidance(profiles: list[dict[str, Any]]) -> dict[str, str | None]:
+    routine = _find_hermes_profile(profiles, "profile:default", "default", "workhorse")
+    summary = _find_hermes_profile(profiles, "profile:mesh-sidecar", "mesh-sidecar", "sidecar")
+    reasoning = _find_hermes_profile(profiles, "profile:mesh-reasoning", "mesh-reasoning", "reasoning-specialist")
+    code = _find_hermes_profile(profiles, "code-specialist")
+    return {
+        "routine": str((routine or {}).get("display_name") or (routine or {}).get("hermes_profile") or (routine or {}).get("name") or "") or None,
+        "summary": str((summary or {}).get("display_name") or (summary or {}).get("hermes_profile") or (summary or {}).get("name") or "") or None,
+        "reasoning": str((reasoning or {}).get("display_name") or (reasoning or {}).get("hermes_profile") or (reasoning or {}).get("name") or "") or None,
+        "code": str((code or {}).get("display_name") or (code or {}).get("hermes_profile") or (code or {}).get("name") or "") or None,
+    }
+
+
 def _recommend_local_profile(task: str, agents: list[dict[str, Any]], recommended_agent: str) -> dict[str, Any] | None:
     if recommended_agent != "hermes":
         return None
@@ -635,31 +673,57 @@ def _recommend_local_profile(task: str, agents: list[dict[str, Any]], recommende
     )
     lowered = (task or "").strip().lower()
 
-    def _find(name: str) -> dict[str, Any] | None:
-        return next((profile for profile in profiles if profile.get("name") == name), None)
+    def _find(*names: str) -> dict[str, Any] | None:
+        return _find_hermes_profile(profiles, *names)
 
     if any(token in lowered for token in {"summary", "summarize", "digest", "route", "routing", "compress", "compression"}):
-        profile = _find("sidecar")
+        profile = _find("profile:mesh-sidecar", "mesh-sidecar", "sidecar")
         if profile:
-            return {"profile": profile.get("name"), "reason": "Lightweight summary/routing task fits Hermes sidecar"}
+            return {
+                "profile": profile.get("name"),
+                "profile_display": profile.get("display_name") or profile.get("hermes_profile") or profile.get("name"),
+                "reason": "Lightweight summary/routing task fits Hermes sidecar",
+            }
 
     if any(token in lowered for token in _CODE_KEYWORDS):
         profile = _find("code-specialist")
         if profile:
             if profile.get("installed"):
-                return {"profile": profile.get("name"), "reason": "Code-heavy work fits Hermes code specialist"}
-            return {"profile": "workhorse", "reason": "Code specialist is not installed locally; stay on Hermes workhorse"}
+                return {
+                    "profile": profile.get("name"),
+                    "profile_display": profile.get("display_name") or profile.get("hermes_profile") or profile.get("name"),
+                    "reason": "Code-heavy work fits Hermes code specialist",
+                }
+            fallback = _find("profile:default", "default", "workhorse")
+            return {
+                "profile": (fallback or {}).get("name") or "workhorse",
+                "profile_display": (fallback or {}).get("display_name") or (fallback or {}).get("hermes_profile") or "default",
+                "reason": "Code specialist is not installed locally; stay on Hermes workhorse",
+            }
 
     if any(token in lowered for token in {"reason", "reasoning", "investigate", "root cause", "second pass"}):
-        profile = _find("reasoning-specialist")
+        profile = _find("profile:mesh-reasoning", "mesh-reasoning", "reasoning-specialist")
         if profile:
             if profile.get("installed"):
-                return {"profile": profile.get("name"), "reason": "Harder local reasoning fits Hermes reasoning specialist"}
-            return {"profile": "workhorse", "reason": "Reasoning specialist is not installed locally; stay on Hermes workhorse"}
+                return {
+                    "profile": profile.get("name"),
+                    "profile_display": profile.get("display_name") or profile.get("hermes_profile") or profile.get("name"),
+                    "reason": "Harder local reasoning fits Hermes reasoning specialist",
+                }
+            fallback = _find("profile:default", "default", "workhorse")
+            return {
+                "profile": (fallback or {}).get("name") or "workhorse",
+                "profile_display": (fallback or {}).get("display_name") or (fallback or {}).get("hermes_profile") or "default",
+                "reason": "Reasoning specialist is not installed locally; stay on Hermes workhorse",
+            }
 
-    profile = _find("workhorse")
+    profile = _find("profile:default", "default", "workhorse")
     if profile:
-        return {"profile": profile.get("name"), "reason": "Default Hermes workhorse profile"}
+        return {
+            "profile": profile.get("name"),
+            "profile_display": profile.get("display_name") or profile.get("hermes_profile") or profile.get("name"),
+            "reason": "Default Hermes workhorse profile",
+        }
     return None
 
 
@@ -704,6 +768,7 @@ def _recommend_route(task: str, agents: list[dict[str, Any]]) -> dict[str, Any]:
         "model_tier": "local-default",
         "fallback_agent": summary["guidance"]["premium"] if memory_heavy and not summary.get("memory_ready", True) else None,
         "recommended_profile": (profile or {}).get("profile"),
+        "recommended_profile_display": (profile or {}).get("profile_display"),
         "profile_reason": (profile or {}).get("reason"),
         "reason": reason,
         "memory_warning": memory_warning,

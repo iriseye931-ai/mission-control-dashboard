@@ -225,14 +225,15 @@ class TestRoutingValidation:
                     "name": "hermes",
                     "routing_group": "local-default",
                     "local_profiles": [
-                        {"name": "workhorse", "installed": True},
-                        {"name": "sidecar", "installed": True},
+                        {"name": "profile:default", "display_name": "default", "hermes_profile": "default", "installed": True},
+                        {"name": "profile:mesh-sidecar", "display_name": "mesh-sidecar", "hermes_profile": "mesh-sidecar", "installed": True},
                     ],
                 },
             ],
         )
         assert rec["recommended_agent"] == "hermes"
-        assert rec["recommended_profile"] == "sidecar"
+        assert rec["recommended_profile"] == "profile:mesh-sidecar"
+        assert rec["recommended_profile_display"] == "mesh-sidecar"
 
     def test_recommend_route_falls_back_when_code_specialist_missing(self):
         rec = _recommend_route(
@@ -242,14 +243,38 @@ class TestRoutingValidation:
                     "name": "hermes",
                     "routing_group": "local-default",
                     "local_profiles": [
-                        {"name": "workhorse", "installed": True},
+                        {"name": "profile:default", "display_name": "default", "hermes_profile": "default", "installed": True},
                         {"name": "code-specialist", "installed": False},
                     ],
                 },
             ],
         )
         assert rec["recommended_agent"] == "hermes"
-        assert rec["recommended_profile"] == "workhorse"
+        assert rec["recommended_profile"] == "profile:default"
+        assert rec["recommended_profile_display"] == "default"
+
+    def test_routing_summary_exposes_hermes_profile_guidance(self):
+        import main as main_mod
+
+        summary = main_mod._build_routing_summary(
+            [
+                {
+                    "name": "hermes",
+                    "routing_group": "local-default",
+                    "local_profiles": [
+                        {"name": "profile:default", "display_name": "default", "hermes_profile": "default"},
+                        {"name": "profile:mesh-sidecar", "display_name": "mesh-sidecar", "hermes_profile": "mesh-sidecar"},
+                        {"name": "profile:mesh-reasoning", "display_name": "mesh-reasoning", "hermes_profile": "mesh-reasoning"},
+                    ],
+                },
+                {"name": "atlas", "routing_group": "premium-pool", "availability_status": "available"},
+            ],
+            {},
+            {"status": "up", "primary_cause": {"kind": "healthy"}},
+        )
+        assert summary["profile_guidance"]["routine"] == "default"
+        assert summary["profile_guidance"]["summary"] == "mesh-sidecar"
+        assert summary["profile_guidance"]["reasoning"] == "mesh-reasoning"
 
 
 class TestTaskSubmitEndpoint:

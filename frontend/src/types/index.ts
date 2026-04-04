@@ -191,6 +191,7 @@ export interface RoutingSummary {
   memory_mode?: string
   warnings?: string[]
   guidance?: Record<string, string>
+  profile_guidance?: Record<string, string | null>
 }
 
 export interface PermissionAuditSummary {
