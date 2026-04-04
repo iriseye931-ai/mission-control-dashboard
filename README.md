@@ -239,6 +239,7 @@ Mission Control now also detects Hermes-native isolated profiles from `~/.hermes
 - MLX-backed execution profiles for model/runtime selection
 - Hermes-native profiles for isolated config, memory, sessions, and gateway state
 - Hermes session lineage for latest titled session, resume target, per-profile session counts, and whether session search/FTS is available
+- Hermes background work for launching deeper side tasks without blocking the main operator session
 
 - `workhorse`
   `Qwen3.5-35B-A3B-4bit`

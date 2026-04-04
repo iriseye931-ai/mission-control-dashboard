@@ -14,6 +14,7 @@ import re
 import signal
 import socket
 import psutil
+import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, AsyncGenerator
@@ -60,6 +61,8 @@ AIMAESTRO_REGISTRY_PATH = AIMAESTRO_AGENTS_DIR / "registry.json"
 AVAILABILITY_OVERRIDES_PATH = Path.home() / ".mesh" / "availability_overrides.json"
 PERMISSION_AUDIT_LOG_PATH = Path.home() / ".mesh" / "permission_audit.jsonl"
 AGENT_INBOX_PATH = Path.home() / ".mesh" / "agent_inbox.jsonl"
+HERMES_BACKGROUND_TASKS_PATH = Path.home() / ".mesh" / "hermes_background_tasks.json"
+HERMES_BACKGROUND_LOG_DIR = Path.home() / ".mesh" / "hermes-background"
 MESH_PROFILE_RUNTIME_DIR = Path.home() / ".mesh" / "mlx-profiles"
 MLX_VENV_BIN = Path.home() / ".mlx" / "venv" / "bin"
 MLX_SERVER_BIN = MLX_VENV_BIN / "mlx_lm.server"
@@ -636,6 +639,7 @@ def _fetch_hermes_profile_session_overview(profile_home: Path, profile_name: str
         "latest_updated_at": None,
         "latest_message_count": None,
         "resume_target": None,
+        "resume_command": f"hermes -c {profile_name}" if profile_name != "default" else "hermes -c",
     }
 
     if db_path.exists():
@@ -675,6 +679,7 @@ def _fetch_hermes_profile_session_overview(profile_home: Path, profile_name: str
                         "latest_ended_at": _iso_from_timestamp(latest["ended_at"]),
                         "latest_message_count": latest["message_count"],
                         "resume_target": latest_title or latest["id"],
+                        "resume_command": f"hermes -p {profile_name} --resume \"{latest_title or latest['id']}\"" if profile_name != "default" else f"hermes --resume \"{latest_title or latest['id']}\"",
                     })
                 return overview
         except Exception:
@@ -710,6 +715,7 @@ def _fetch_hermes_profile_session_overview(profile_home: Path, profile_name: str
         "latest_ended_at": latest.get("ended_at"),
         "latest_updated_at": latest.get("last_updated") or _iso_from_timestamp(latest_file.stat().st_mtime),
         "resume_target": latest_title or latest_session_id,
+        "resume_command": f"hermes -p {profile_name} --resume \"{latest_title or latest_session_id}\"" if profile_name != "default" else f"hermes --resume \"{latest_title or latest_session_id}\"",
     })
     return overview
 
@@ -747,7 +753,113 @@ def _fetch_hermes_sessions_overview() -> dict[str, Any]:
         "latest_source": (latest or {}).get("latest_source"),
         "latest_updated_at": (latest or {}).get("latest_updated_at"),
         "resume_target": (latest or {}).get("resume_target"),
+        "resume_command": (latest or {}).get("resume_command"),
     }
+
+
+def _read_hermes_background_registry() -> list[dict[str, Any]]:
+    data = _read_json(HERMES_BACKGROUND_TASKS_PATH)
+    return data if isinstance(data, list) else []
+
+
+def _write_hermes_background_registry(tasks: list[dict[str, Any]]) -> None:
+    HERMES_BACKGROUND_TASKS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    HERMES_BACKGROUND_TASKS_PATH.write_text(json.dumps(tasks, indent=2))
+
+
+def _refresh_background_task_state(task: dict[str, Any]) -> dict[str, Any]:
+    refreshed = dict(task)
+    pid = refreshed.get("pid")
+    running = bool(pid) and _pid_running(int(pid))
+    refreshed["running"] = running
+    if running:
+        refreshed["status"] = "running"
+    elif refreshed.get("status") == "running":
+        refreshed["status"] = "finished"
+        refreshed["ended_at"] = refreshed.get("ended_at") or _now_iso()
+    return refreshed
+
+
+def _fetch_hermes_background_tasks() -> list[dict[str, Any]]:
+    tasks = [_refresh_background_task_state(task) for task in _read_hermes_background_registry()]
+    if tasks != _read_hermes_background_registry():
+        try:
+            _write_hermes_background_registry(tasks)
+        except Exception:
+            pass
+    tasks.sort(key=lambda item: item.get("started_at", ""), reverse=True)
+    return tasks
+
+
+def _build_hermes_background_command(profile_name: str, prompt: str) -> list[str]:
+    safe_profile = (profile_name or "default").strip() or "default"
+    if safe_profile == "default":
+        return [str(HERMES_BIN), "chat", "-q", prompt]
+    return [str(HERMES_BIN), "-p", safe_profile, "chat", "-q", prompt]
+
+
+def _launch_hermes_background_task(profile_name: str, prompt: str, title: str | None = None) -> dict[str, Any]:
+    if not HERMES_BIN.exists():
+        raise RuntimeError("Hermes CLI is not available")
+
+    task_id = f"bg_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+    HERMES_BACKGROUND_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = HERMES_BACKGROUND_LOG_DIR / f"{task_id}.log"
+    command = _build_hermes_background_command(profile_name, prompt)
+    log_handle = open(log_path, "a", encoding="utf-8")
+    try:
+        proc = subprocess.Popen(
+            command,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            env={**os.environ, "PATH": f"{LOCAL_BIN_DIR}:{os.environ.get('PATH', '')}"},
+        )
+    finally:
+        log_handle.close()
+
+    task = {
+        "id": task_id,
+        "profile": profile_name,
+        "title": (title or prompt.splitlines()[0][:80]).strip() or task_id,
+        "prompt": prompt[:500],
+        "command": command,
+        "log_path": str(log_path),
+        "pid": proc.pid,
+        "status": "running",
+        "running": True,
+        "started_at": _now_iso(),
+        "ended_at": None,
+    }
+    tasks = _fetch_hermes_background_tasks()
+    tasks = [task, *[item for item in tasks if item.get("id") != task_id]]
+    _write_hermes_background_registry(tasks[:20])
+    return task
+
+
+def _stop_hermes_background_task(task_id: str) -> dict[str, Any] | None:
+    tasks = _fetch_hermes_background_tasks()
+    updated: dict[str, Any] | None = None
+    new_tasks: list[dict[str, Any]] = []
+    for task in tasks:
+        current = dict(task)
+        if current.get("id") == task_id:
+            pid = current.get("pid")
+            if pid and _pid_running(int(pid)):
+                try:
+                    os.killpg(int(pid), signal.SIGTERM)
+                except Exception:
+                    try:
+                        os.kill(int(pid), signal.SIGTERM)
+                    except Exception:
+                        pass
+            current["status"] = "stopped"
+            current["running"] = False
+            current["ended_at"] = _now_iso()
+            updated = current
+        new_tasks.append(current)
+    _write_hermes_background_registry(new_tasks)
+    return updated
 
 
 def _discover_hermes_native_profiles() -> list[dict[str, Any]]:
@@ -1747,6 +1859,7 @@ def _fetch_amp_messages() -> list[dict]:
 def _fetch_hermes_status() -> dict:
     """Get latest Hermes session info."""
     sessions_overview = _fetch_hermes_sessions_overview()
+    background_tasks = _fetch_hermes_background_tasks()
     try:
         sessions = sorted(
             [f for f in HERMES_SESSIONS_DIR.glob("session_*.json") if "request_dump" not in f.name],
@@ -1757,6 +1870,7 @@ def _fetch_hermes_status() -> dict:
             return {
                 "status": "no sessions",
                 "sessions": sessions_overview,
+                "background_tasks": background_tasks,
                 "session_count": sessions_overview.get("session_count", 0),
                 "search_ready": sessions_overview.get("search_ready", False),
             }
@@ -1776,11 +1890,13 @@ def _fetch_hermes_status() -> dict:
             "latest_source": sessions_overview.get("latest_source"),
             "latest_updated_at": sessions_overview.get("latest_updated_at"),
             "sessions": sessions_overview,
+            "background_tasks": background_tasks,
         }
     except Exception:
         return {
             "status": "unavailable",
             "sessions": sessions_overview,
+            "background_tasks": background_tasks,
             "session_count": sessions_overview.get("session_count", 0),
             "search_ready": sessions_overview.get("search_ready", False),
         }
@@ -2596,6 +2712,37 @@ async def api_hermes():
     return status
 
 
+@app.post("/api/hermes/background")
+async def api_hermes_background(req: HermesBackgroundTaskRequest):
+    hermes_agent = next((agent for agent in _state.get("agents", []) if agent.get("name") == "hermes"), None)
+    profiles = (hermes_agent or {}).get("local_profiles") or []
+    target = _find_hermes_profile(profiles, req.profile, f"profile:{req.profile}")
+    resolved_profile = str((target or {}).get("hermes_profile") or req.profile or "default")
+    try:
+        task = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: _launch_hermes_background_task(resolved_profile, req.prompt, req.title),
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"failed to launch Hermes background task: {exc}")
+
+    _state["hermes_status"] = await asyncio.get_event_loop().run_in_executor(None, _fetch_hermes_status)
+    await _broadcast_status()
+    return {"ok": True, "task": task}
+
+
+@app.post("/api/hermes/background/{task_id}/stop")
+async def api_hermes_background_stop(task_id: str):
+    task = await asyncio.get_event_loop().run_in_executor(None, lambda: _stop_hermes_background_task(task_id))
+    if not task:
+        raise HTTPException(status_code=404, detail="background task not found")
+    _state["hermes_status"] = await asyncio.get_event_loop().run_in_executor(None, _fetch_hermes_status)
+    await _broadcast_status()
+    return {"ok": True, "task": task}
+
+
 @app.get("/api/trending")
 async def api_trending():
     return {"repos": _state["trending_repos"], "cached": _trending_cache_time > 0}
@@ -2816,6 +2963,42 @@ class LocalProfileActionRequest(BaseModel):
         v = v.strip().lower()
         if v not in {"start", "stop"}:
             raise ValueError("action must be start or stop")
+        return v
+
+
+class HermesBackgroundTaskRequest(BaseModel):
+    profile: str = "default"
+    prompt: str
+    title: str | None = None
+
+    @field_validator("profile")
+    @classmethod
+    def _chk_background_profile(cls, v: str) -> str:
+        v = v.strip().lower()
+        if not v:
+            raise ValueError("profile required")
+        return v
+
+    @field_validator("prompt")
+    @classmethod
+    def _chk_background_prompt(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("prompt required")
+        if len(v) > 4000:
+            raise ValueError("prompt too long (max 4000)")
+        return v
+
+    @field_validator("title")
+    @classmethod
+    def _chk_background_title(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        if len(v) > 120:
+            raise ValueError("title too long (max 120)")
         return v
 
 

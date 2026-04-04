@@ -16,14 +16,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from main import (
     app,
     AmpSendRequest,
+    HermesBackgroundTaskRequest,
     PermissionAuditRequest,
     RouteTaskRequest,
     TaskSubmitRequest,
     _RAG_MAX_FILE_BYTES,
     _RAG_ALLOWED_EXT,
+    _build_hermes_background_command,
     _finalize_agents,
     _fetch_hermes_profile_session_overview,
     _fetch_hermes_sessions_overview,
+    _refresh_background_task_state,
     _recommend_route,
 )
 
@@ -410,6 +413,23 @@ class TestHermesSessions:
         assert overview["profile_count"] == 2
         assert overview["active_profiles"] == 2
         assert overview["search_ready"] is True
+
+
+class TestHermesBackgroundTasks:
+    def test_background_task_request_validation(self):
+        req = HermesBackgroundTaskRequest(profile="mesh-sidecar", prompt="Summarize repo drift", title="sidecar run")
+        assert req.profile == "mesh-sidecar"
+        assert req.prompt == "Summarize repo drift"
+
+    def test_build_background_command_uses_profile(self):
+        assert _build_hermes_background_command("default", "hello")[1:] == ["chat", "-q", "hello"]
+        assert _build_hermes_background_command("mesh-sidecar", "hello")[1:] == ["-p", "mesh-sidecar", "chat", "-q", "hello"]
+
+    def test_refresh_background_task_state_marks_finished(self):
+        task = {"id": "bg_1", "pid": 999999, "status": "running", "running": True}
+        refreshed = _refresh_background_task_state(task)
+        assert refreshed["running"] is False
+        assert refreshed["status"] == "finished"
 
 
 class TestAvailabilityEndpoint:

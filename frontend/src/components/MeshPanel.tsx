@@ -214,6 +214,10 @@ function HermesTab({
   const [taskResult, setTaskResult] = useState<string | null>(null)
   const [availabilityBusy, setAvailabilityBusy] = useState<string | null>(null)
   const [profileBusy, setProfileBusy] = useState<string | null>(null)
+  const [backgroundPrompt, setBackgroundPrompt] = useState('')
+  const [backgroundProfile, setBackgroundProfile] = useState('default')
+  const [backgroundBusy, setBackgroundBusy] = useState(false)
+  const [backgroundStopBusy, setBackgroundStopBusy] = useState<string | null>(null)
   const [auditEntries, setAuditEntries] = useState<PermissionAuditEntry[]>([])
   const [auditLoading, setAuditLoading] = useState(false)
   const [expandedAgents, setExpandedAgents] = useState<Record<string, boolean>>({})
@@ -274,6 +278,9 @@ function HermesTab({
 
   const showSession = status && status.status !== 'unavailable' && status.status !== 'no sessions'
   const sessionProfiles = status?.sessions?.profiles ?? []
+  const hermesAgent = agents.find((agent) => agent.name === 'hermes')
+  const hermesNativeProfiles = (hermesAgent?.local_profiles ?? []).filter((profile) => profile.profile_kind === 'hermes-native')
+  const backgroundTasks = status?.background_tasks ?? []
   const focusedAgent = focus?.type === 'agent'
     ? agents.find((agent) => (agent.name ?? '').toLowerCase().replace(/\s+/g, '-') === focus.key)
     : null
@@ -349,6 +356,41 @@ function HermesTab({
     } finally {
       setProfileBusy(null)
       void loadAudit()
+    }
+  }
+
+  async function launchBackgroundTask(e: FormEvent) {
+    e.preventDefault()
+    if (!backgroundPrompt.trim()) return
+    setBackgroundBusy(true)
+    try {
+      const res = await fetch('/api/hermes/background', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profile: backgroundProfile, prompt: backgroundPrompt }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail ?? `Server error: ${res.status}`)
+      setTaskResult(`background launched: ${data.task.title} -> ${data.task.profile}`)
+      setBackgroundPrompt('')
+    } catch (err) {
+      setTaskResult(err instanceof Error ? err.message : 'Background launch failed')
+    } finally {
+      setBackgroundBusy(false)
+    }
+  }
+
+  async function stopBackgroundTask(taskId: string) {
+    setBackgroundStopBusy(taskId)
+    try {
+      const res = await fetch(`/api/hermes/background/${taskId}/stop`, { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail ?? `Server error: ${res.status}`)
+      setTaskResult(`background stopped: ${data.task.title}`)
+    } catch (err) {
+      setTaskResult(err instanceof Error ? err.message : 'Background stop failed')
+    } finally {
+      setBackgroundStopBusy(null)
     }
   }
 
@@ -559,6 +601,11 @@ function HermesTab({
                           <div style={{ marginTop: 3, fontSize: 8, color: '#64748b', fontFamily: 'monospace', lineHeight: 1.5 }}>
                             {profile.latest_title ?? profile.resume_target ?? 'no sessions yet'}
                           </div>
+                          {profile.resume_command && (
+                            <div style={{ marginTop: 3, fontSize: 8, color: '#334155', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                              {profile.resume_command}
+                            </div>
+                          )}
                         </div>
                         <div style={{ fontSize: 8, color: '#94a3b8', fontFamily: 'monospace', lineHeight: 1.5 }}>
                           {profile.session_count} sess
@@ -572,6 +619,81 @@ function HermesTab({
                     ))}
                   </div>
                 )}
+                <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid rgba(15,23,42,0.45)' }}>
+                  <div style={{ fontSize: 8, color: '#475569', fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: 8 }}>
+                    background work
+                  </div>
+                  <form onSubmit={launchBackgroundTask} style={{ display: 'grid', gap: 8 }}>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <select
+                        value={backgroundProfile}
+                        onChange={(e) => setBackgroundProfile(e.target.value)}
+                        style={{ background: '#090b13', border: '1px solid #182033', color: '#e2e8f0', borderRadius: 8, padding: '7px 9px', fontSize: 10, fontFamily: 'monospace' }}
+                      >
+                        {hermesNativeProfiles.map((profile) => (
+                          <option key={profile.name} value={profile.hermes_profile ?? profile.display_name ?? profile.name}>
+                            {profile.display_name ?? profile.hermes_profile ?? profile.name}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="submit"
+                        disabled={backgroundBusy || !backgroundPrompt.trim()}
+                        style={{
+                          fontSize: 10,
+                          padding: '6px 10px',
+                          borderRadius: 8,
+                          border: 'none',
+                          background: backgroundBusy ? '#06b6d466' : '#06b6d4',
+                          color: '#0a0a0f',
+                          cursor: backgroundBusy ? 'not-allowed' : 'pointer',
+                          fontFamily: 'monospace',
+                          opacity: backgroundPrompt.trim() ? 1 : 0.4,
+                        }}
+                      >
+                        {backgroundBusy ? 'Launching…' : 'Launch background'}
+                      </button>
+                    </div>
+                    <textarea
+                      value={backgroundPrompt}
+                      onChange={(e) => setBackgroundPrompt(e.target.value)}
+                      rows={2}
+                      placeholder="Run a deeper Hermes task without blocking the active session..."
+                      style={{ background: '#090b13', border: '1px solid #182033', color: '#e2e8f0', borderRadius: 8, padding: '9px 10px', fontSize: 10, fontFamily: 'monospace', resize: 'vertical' }}
+                    />
+                  </form>
+                  {backgroundTasks.length > 0 && (
+                    <div style={{ marginTop: 10, display: 'grid', gap: 6 }}>
+                      {backgroundTasks.slice(0, 4).map((task) => (
+                        <div key={task.id} style={{ padding: '7px 0', borderTop: '1px solid rgba(15,23,42,0.45)', display: 'grid', gap: 4 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'baseline' }}>
+                            <span style={{ fontSize: 9, color: '#cbd5e1', fontFamily: 'monospace' }}>{task.title}</span>
+                            <span style={{ fontSize: 8, color: task.running ? '#10b981' : '#94a3b8', fontFamily: 'monospace', textTransform: 'uppercase' }}>{task.status}</span>
+                          </div>
+                          <div style={{ fontSize: 8, color: '#64748b', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                            {task.profile} · {new Date(task.started_at).toLocaleString()}
+                          </div>
+                          <div style={{ fontSize: 8, color: '#334155', fontFamily: 'monospace', lineHeight: 1.5 }}>
+                            {task.prompt}
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                            {task.log_path && <span style={{ fontSize: 8, color: '#475569', fontFamily: 'monospace' }}>{task.log_path}</span>}
+                            {task.running && (
+                              <button
+                                type="button"
+                                onClick={() => stopBackgroundTask(task.id)}
+                                disabled={backgroundStopBusy === task.id}
+                                style={{ fontSize: 8, padding: '3px 6px', borderRadius: 6, border: '1px solid #7f1d1d', background: backgroundStopBusy === task.id ? '#3f1d1d' : '#7f1d1d', color: '#fecaca', cursor: backgroundStopBusy === task.id ? 'not-allowed' : 'pointer', fontFamily: 'monospace' }}
+                              >
+                                {backgroundStopBusy === task.id ? 'stopping' : 'stop'}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </PanelCard>
             ) : (
               <p style={{ fontSize: 10, color: '#334155' }}>No active Hermes session</p>

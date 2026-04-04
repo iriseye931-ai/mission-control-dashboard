@@ -229,6 +229,7 @@ export default function MeshGraph({
   const lastUpdate = useDashboardStore((s) => s.lastUpdate)
   const memorySummary = useDashboardStore((s) => s.memorySummary)
   const routingSummary = useDashboardStore((s) => s.routingSummary)
+  const hermesStatus = useDashboardStore((s) => s.hermesStatus)
   const [hoveredNode, setHoveredNode] = useState<GraphNodeMeta | null>(null)
   const [pinnedNode, setPinnedNode] = useState<GraphNodeMeta | null>(null)
 
@@ -1344,6 +1345,9 @@ export default function MeshGraph({
               const hermesLatestTitle = agentKey === 'hermes'
                 ? hermesNativeProfiles.find((profile) => profile.session_overview?.latest_title)?.session_overview?.latest_title
                 : null
+              const hermesBackgroundCount = agentKey === 'hermes'
+                ? ((hermesStatus?.background_tasks ?? []).filter((task) => task.running).length)
+                : null
 
               return (
                 <div
@@ -1410,6 +1414,14 @@ export default function MeshGraph({
                         <span style={{ fontSize: 9, color: 'rgba(150,200,220,0.44)', letterSpacing:'0.14em', textTransform:'uppercase' }}>Sessions</span>
                         <span style={{ fontSize: 12, color: isFocused ? '#effcff' : '#c8eaf8', textAlign: 'right', minWidth: 0, lineHeight: 1.4, whiteSpace: 'normal', wordBreak: 'break-word' }}>
                           {hermesSessionCount} tracked
+                        </span>
+                      </div>
+                    )}
+                    {agentKey === 'hermes' && hermesBackgroundCount != null && hermesBackgroundCount > 0 && (
+                      <div style={{ display:'grid', gridTemplateColumns: '72px minmax(0, 1fr)', gap: 10, alignItems: 'start' }}>
+                        <span style={{ fontSize: 9, color: 'rgba(150,200,220,0.44)', letterSpacing:'0.14em', textTransform:'uppercase' }}>Background</span>
+                        <span style={{ fontSize: 12, color: isFocused ? '#effcff' : '#c8eaf8', textAlign: 'right', minWidth: 0, lineHeight: 1.4, whiteSpace: 'normal', wordBreak: 'break-word' }}>
+                          {hermesBackgroundCount} running
                         </span>
                       </div>
                     )}

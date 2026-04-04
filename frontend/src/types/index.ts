@@ -70,6 +70,7 @@ export interface Agent {
       latest_updated_at?: string | null
       latest_message_count?: number | null
       resume_target?: string | null
+      resume_command?: string | null
     }
   }[]
 }
@@ -197,6 +198,19 @@ export interface HermesStatus {
   latest_profile?: string | null
   latest_source?: string | null
   latest_updated_at?: string | null
+  background_tasks?: {
+    id: string
+    profile: string
+    title: string
+    prompt?: string
+    command?: string[]
+    log_path?: string
+    pid?: number
+    status: string
+    running: boolean
+    started_at: string
+    ended_at?: string | null
+  }[]
   sessions?: {
     profiles: {
       profile: string
@@ -211,6 +225,7 @@ export interface HermesStatus {
       latest_updated_at?: string | null
       latest_message_count?: number | null
       resume_target?: string | null
+      resume_command?: string | null
     }[]
     profile_count: number
     active_profiles: number
@@ -221,6 +236,7 @@ export interface HermesStatus {
     latest_source?: string | null
     latest_updated_at?: string | null
     resume_target?: string | null
+    resume_command?: string | null
   }
 }
 
